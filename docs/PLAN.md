@@ -42,4 +42,4 @@
   - при упаковке (этап 4) собранный `static/` нужно явно включить в wheel/exe: он в .gitignore
 - [x] 3. AI-слой (Cursor CLI, Claude API, Ollama), режим «Обучение», объяснение сигналов,
   разбор журнала, согласие на отправку данных, кэш и проверка чисел в ответе
-- [ ] 4. Упаковка: pywebview + PyInstaller, установщик (потом, возможно, Tauri)
+- [~] 4. Упаковка: pywebview + PyInstaller + Inno Setup, сборка в GitHub Actions (готово, не проверено на чистой Windows)

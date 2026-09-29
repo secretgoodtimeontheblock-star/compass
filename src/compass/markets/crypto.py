@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -14,6 +15,8 @@ from compass.models import TIMEFRAME_MS, Candle, Instrument
 
 _TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 _PAGE = 500  # безопасный размер страницы для большинства бирж
+_MAX_RESULTS = 30
+_CATALOG_TTL_S = 6 * 3600
 
 
 class CryptoAdapter:
@@ -28,6 +31,9 @@ class CryptoAdapter:
         self.exchange_id = exchange_id
         self.proxy = proxy
         self.name = f"Крипта ({exchange_id})"
+        self._pairs: list[str] = []
+        self._pairs_at = 0.0
+        self._pairs_lock = threading.Lock()
         if exchange is not None:
             self._ex = exchange
             return
@@ -62,15 +68,43 @@ class CryptoAdapter:
             raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
         return sorted(out.values(), key=lambda c: c.ts)[-limit:]
 
+    def _load_pairs(self) -> list[str]:
+        """Все активные спот-пары биржи; кэш в памяти, при сбое — прежний список."""
+        with self._pairs_lock:
+            if self._pairs and time.monotonic() - self._pairs_at < _CATALOG_TTL_S:
+                return self._pairs
+            try:
+                markets = self._ex.load_markets()
+            except ccxt.BaseError as e:
+                if self._pairs:
+                    return self._pairs
+                raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
+            self._pairs = sorted(
+                {m["symbol"] for m in markets.values() if m.get("spot") and m.get("active") is not False}
+            )
+            self._pairs_at = time.monotonic()
+            return self._pairs
+
     def search(self, query: str) -> list[Instrument]:
-        try:
-            markets = self._ex.load_markets()
-        except ccxt.BaseError as e:
-            raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
+        """Поиск по всем парам: сначала по базовой монете, затем по подстроке.
+        `btc`, `btc/usdt` и `btcusdt` находят одно и то же."""
         q = query.strip().upper()
-        res = [
-            Instrument(m["symbol"], m["symbol"], self.id)
-            for m in markets.values()
-            if m.get("spot") and m.get("active", True) and q in m["symbol"].upper()
-        ]
-        return sorted(res, key=lambda i: i.symbol)[:20]
+        if not q:
+            return []
+        flat = q.replace("/", "").replace("-", "")
+        ranked: list[tuple[int, str]] = []
+        for sym in self._load_pairs():
+            up = sym.upper()
+            base = up.split("/")[0]
+            compact = up.replace("/", "")
+            if up == q or base == q:
+                rank = 0
+            elif base.startswith(q):
+                rank = 1
+            elif q in up or flat in compact:
+                rank = 2
+            else:
+                continue
+            ranked.append((rank, sym))
+        ranked.sort(key=lambda t: (t[0], "/USDT" not in t[1], t[1]))
+        return [Instrument(s, s, self.id) for _, s in ranked[:_MAX_RESULTS]]

@@ -13,8 +13,9 @@
 Telegram-уведомления, журнал сделок и интерфейс: график со свечами, объёмом, SMA и
 маркерами сигналов/своих сделок, избранное, лента сигналов, проверка стратегий с кривой
 капитала, журнал, тёмная/светлая тема. AI объясняет сигналы, разбирает журнал и отвечает
-на вопросы в режиме обучения (Cursor CLI, Claude API, Ollama). Следующий этап —
-упаковка и установщик, см. [docs/PLAN.md](docs/PLAN.md).
+на вопросы в режиме обучения (Cursor CLI, Claude API, Ollama). Поиск работает по полному
+каталогу: акции, ETF и БПИФ МосБиржи и все спот-пары OKX. Сборка установщика Windows
+описана ниже, план — в [docs/PLAN.md](docs/PLAN.md).
 
 ## Как это работает
 
@@ -64,6 +65,13 @@ Telegram-уведомления, журнал сделок и интерфейс
 `/api/signals`, `/api/scan`, `/api/risk`, `/api/settings`, `/api/journal`.
 AI: `/api/ai/status`, `/api/ai/providers`, `/api/ai/providers/{provider_id}/models`,
 `/api/ai/explain-signal`, `/api/ai/review-journal`, `/api/ai/ask`.
+
+## Установка (Windows)
+
+Установщик `Compass-Setup-*.exe` собирается в GitHub Actions (workflow «Windows installer»:
+вручную или по тегу `v*`, файл попадает в Releases). Установка без прав администратора,
+Python и Node на ноутбуке не нужны. Нужен WebView2 — он есть в Windows 10/11.
+Локальная сборка: `./packaging/build.ps1` (Python 3.12, Node 22 + pnpm, Inno Setup 6).
 
 ## Запуск (разработка)
 

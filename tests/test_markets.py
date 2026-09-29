@@ -66,20 +66,49 @@ def test_moex_rejects_unknown_timeframe() -> None:
         MoexAdapter(httpx.Client()).fetch_candles("SBER", "4h", None, 10)
 
 
-def test_moex_search_keeps_only_traded_shares() -> None:
-    payload = {
-        "securities": {
-            "columns": ["secid", "shortname", "is_traded", "group"],
-            "data": [
-                ["SBER", "Сбербанк", 1, "stock_shares"],
-                ["SBERP", "Сбербанк-п", 1, "stock_shares"],
-                ["OLD", "Старая", 0, "stock_shares"],
-                ["SU26238", "ОФЗ", 1, "stock_bonds"],
-            ],
-        }
+def _catalog_client(calls: list[str]) -> httpx.Client:
+    cols = ["SECID", "SHORTNAME", "SECNAME", "LOTSIZE", "STATUS"]
+    boards = {
+        "TQBR": [
+            ["SBER", "Сбербанк", "Сбербанк России ПАО ао", 10, "A"],
+            ["SBERP", "Сбербанк-п", "Сбербанк России ПАО ап", 10, "A"],
+            ["GAZP", "ГАЗПРОМ ао", "Газпром ПАО ао", 10, "A"],
+            ["OLD", "Старая", "Старая", 1, "N"],
+        ],
+        "TQTF": [["TMOS", "TMOS ETF", "Тинькофф iMOEX", 1, "A"]],
+        "TQIF": [],
     }
-    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload))))
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        board = req.url.path.split("/boards/")[1].split("/")[0]
+        calls.append(board)
+        return httpx.Response(200, json={"securities": {"columns": cols, "data": boards[board]}})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_moex_search_uses_full_catalog_and_ranks() -> None:
+    calls: list[str] = []
+    a = MoexAdapter(_catalog_client(calls))
     assert [i.symbol for i in a.search("SBER")] == ["SBER", "SBERP"]
+    assert [i.symbol for i in a.search("газпром")] == ["GAZP"]  # по названию
+    assert [i.symbol for i in a.search("tmos")] == ["TMOS"]  # ETF с другой площадки
+    assert a.search("old") == []  # не торгуется
+    assert calls == ["TQBR", "TQTF", "TQIF"]  # каталог загружен один раз
+
+
+def test_moex_lot_size_and_board_come_from_catalog() -> None:
+    a = MoexAdapter(_catalog_client([]))
+    assert a.lot_size("SBER") == 10
+    assert a._board_of("TMOS") == "TQTF"
+    with pytest.raises(MarketError):
+        a.lot_size("NOPE")
+
+
+def test_moex_catalog_failure_is_market_error() -> None:
+    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503))))
+    with pytest.raises(MarketError):
+        a.search("SBER")
 
 
 class FakeExchange:
@@ -98,6 +127,9 @@ class FakeExchange:
             "BTC/USDT": {"symbol": "BTC/USDT", "spot": True},
             "BTC/USDT:USDT": {"symbol": "BTC/USDT:USDT", "spot": False},
             "ETH/USDT": {"symbol": "ETH/USDT", "spot": True},
+            "WBTC/BTC": {"symbol": "WBTC/BTC", "spot": True},
+            "BTC/EUR": {"symbol": "BTC/EUR", "spot": True},
+            "DEAD/USDT": {"symbol": "DEAD/USDT", "spot": True, "active": False},
         }
 
 
@@ -117,4 +149,7 @@ def test_crypto_does_not_loop_when_cursor_stuck() -> None:
 
 def test_crypto_search_spot_only() -> None:
     a = CryptoAdapter(exchange=FakeExchange([]))
-    assert [i.symbol for i in a.search("btc")] == ["BTC/USDT"]
+    # база раньше подстроки, USDT-пары раньше остальных; фьючерсы и неактивные — нет
+    assert [i.symbol for i in a.search("btc")] == ["BTC/USDT", "BTC/EUR", "WBTC/BTC"]
+    assert [i.symbol for i in a.search("btcusdt")] == ["BTC/USDT"]
+    assert a.search("dead") == []

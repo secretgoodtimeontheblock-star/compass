@@ -69,7 +69,7 @@ export function SearchBox({ market, onPick }: Props) {
       <input
         type="search"
         value={q}
-        placeholder={market === "moex" ? "Найти акцию: SBER, Газпром…" : "Найти пару: BTC, ETH…"}
+        placeholder={market === "moex" ? "Акции и фонды МосБиржи: SBER, Газпром, TMOS…" : "Пара OKX: BTC, ETH, SOL…"}
         aria-label="Поиск инструмента"
         onChange={(e) => {
           setQ(e.target.value);

@@ -1,0 +1,30 @@
+name: Windows installer
+# Установщик собирается вручную (Actions → Run workflow) или по тегу v*; при теге
+# файл прикладывается к GitHub Release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: choco install innosetup -y --no-progress
+      - run: ./packaging/build.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with: { name: Compass-Setup, path: dist/Compass-Setup-*.exe }
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with: { files: dist/Compass-Setup-*.exe }
