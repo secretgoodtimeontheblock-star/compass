@@ -272,3 +272,32 @@ def test_explain_uses_signal_params_and_flags_legacy_signals(env: Env) -> None:
     body = client.post("/api/ai/explain-signal", json={"signal_id": sig.id, "refresh": True}).json()
     assert "Канал входа (свечей) = 20" in env.cloud.calls[-1][1]
     assert any("не сохранены" in w for w in body["warnings"])
+
+
+def test_risk_api_reports_currency_and_instrument_warnings(env: Env) -> None:
+    from compass.models import InstrumentInfo
+
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    body = {"market": "moex", "symbol": "SBER", "entry": 200.005, "stop": 190}
+    r = client.post("/api/risk", json=body).json()
+    assert r["currency"] == "RUB" and any("шагу цены" in w for w in r["warnings"])
+    env.adapter.instrument_info = lambda s: InstrumentInfo(s, "moex", "scripted", lot=10, trading_open=False, complete=False)
+    r = client.post("/api/risk", json={**body, "entry": 200}).json()
+    assert any("торги" in w for w in r["warnings"]) and any("не полностью" in w for w in r["warnings"])
+    assert client.get("/api/instrument", params={"market": "moex", "symbol": "SBER"}).json()["lot"] == 10
+
+
+def test_risk_api_prices_bond_as_percent_of_face(env: Env) -> None:
+    from compass.models import InstrumentInfo
+
+    env.adapter.instrument_info = lambda s: InstrumentInfo(
+        s, "moex", "scripted", lot=1, price_step=0.001, currency="RUB", face_value=1000.0, accrued=23.15,
+        price_unit="percent_of_face",
+    )
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    r = client.post("/api/risk", json={"market": "moex", "symbol": "SU26238", "entry": 51.152, "stop": 49.0,
+                                       "fee_pct": 0, "slippage_pct": 0}).json()
+    assert r["qty"] == 46 and r["cost"] == pytest.approx(46 * (511.52 + 23.15), abs=0.01)
+    assert any("Облигация" in w for w in r["warnings"])
+    env.adapter.instrument_info = lambda s: InstrumentInfo(s, "moex", "scripted", price_unit="percent_of_face")
+    assert client.post("/api/risk", json={"market": "moex", "symbol": "X", "entry": 51.0, "stop": 49.0}).status_code == 422

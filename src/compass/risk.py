@@ -29,12 +29,12 @@ class PositionSize:
     warning: str | None = None  # почему количество нулевое или урезано
 
 
-def _loss_per_unit(entry: float, stop: float, fee: float, slip: float) -> float:
+def _loss_per_unit(entry: float, stop: float, fee: float, slip: float, unit_value: float) -> float:
     """Потеря на единицу: заплатили за вход с проскальзыванием и комиссией, вышли по стопу
-    с проскальзыванием и комиссией."""
+    с проскальзыванием и комиссией. unit_value — деньги за единицу цены на одну бумагу."""
     paid = entry * (1 + slip) * (1 + fee)
     got = stop * (1 - slip) * (1 - fee)
-    return paid - got
+    return (paid - got) * unit_value
 
 
 def position_size(
@@ -47,9 +47,16 @@ def position_size(
     fee_pct: float = 0.0,
     slippage_pct: float = 0.0,
     available: float | None = None,
+    unit_value: float = 1.0,
+    accrued: float = 0.0,
+    min_qty: float | None = None,
+    min_cost: float | None = None,
 ) -> PositionSize:
     """lot — размер лота (акции МосБиржи); qty_step — шаг количества (крипта, напр. 1e-6).
-    available — свободные средства (по умолчанию весь капитал); fee_pct, slippage_pct — в процентах."""
+    available — свободные средства (по умолчанию весь капитал); fee_pct, slippage_pct — в процентах.
+    unit_value — во сколько денег превращается единица цены: для облигаций цена в % номинала,
+    поэтому номинал/100; accrued — НКД на бумагу (платится при покупке, при расчёте потери не учитывается);
+    min_qty, min_cost — минимальная заявка биржи."""
     if capital <= 0 or not 0 < risk_pct <= 100:
         raise ValueError("Капитал должен быть больше нуля, риск — от 0 до 100%")
     if not all(math.isfinite(x) for x in (capital, risk_pct, entry, stop)):
@@ -65,10 +72,12 @@ def position_size(
     funds = capital if available is None else available
     if funds < 0:
         raise ValueError("Свободные средства не могут быть отрицательными")
+    if unit_value <= 0 or accrued < 0:
+        raise ValueError("Номинал и НКД некорректны")
 
     fee, slip = fee_pct / 100, slippage_pct / 100
-    per_unit_loss = _loss_per_unit(entry, stop, fee, slip)
-    per_unit_cost = entry * (1 + slip) * (1 + fee)
+    per_unit_loss = _loss_per_unit(entry, stop, fee, slip, unit_value)
+    per_unit_cost = entry * (1 + slip) * (1 + fee) * unit_value + accrued
     budget = capital * risk_pct / 100
 
     by_risk = budget / per_unit_loss
@@ -84,8 +93,16 @@ def position_size(
         qty = lots * lot
 
     warning = None
+    below_min = qty > 0 and (
+        (min_qty is not None and qty < min_qty - 1e-12) or (min_cost is not None and qty * per_unit_cost < min_cost)
+    )
+    if below_min:
+        warning = "Количество меньше минимальной заявки биржи: такую заявку не примут."
+        qty = lots = 0.0
     unit = lot if not qty_step else qty_step
-    if qty <= 0:
+    if below_min:
+        pass
+    elif qty <= 0:
         if unit * per_unit_cost > funds:
             warning = "Свободных средств не хватает даже на минимальную покупку (один лот)."
         else:
@@ -96,7 +113,7 @@ def position_size(
     elif capped:
         warning = "Количество ограничено свободными средствами: риск на сделку получится меньше заданного."
 
-    worse_loss = _loss_per_unit(entry, stop, fee, slip * WORSE_SLIPPAGE_MULT)
+    worse_loss = _loss_per_unit(entry, stop, fee, slip * WORSE_SLIPPAGE_MULT, unit_value)
     return PositionSize(
         qty=round(qty, 10),
         lots=round(lots, 10),

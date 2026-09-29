@@ -12,7 +12,7 @@ from compass.cache import CandleCache
 from compass.db import connect
 from compass.journal import Journal
 from compass.markets import MarketError
-from compass.models import Candle, Instrument
+from compass.models import Candle, Instrument, InstrumentInfo
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
 from compass.watchlist import Watchlist
@@ -52,6 +52,9 @@ class ScriptedAdapter:
 
     def lot_size(self, symbol: str) -> int:
         return self.lot
+
+    def instrument_info(self, symbol: str) -> InstrumentInfo:
+        return InstrumentInfo(symbol, self.id, "scripted", lot=self.lot, price_step=0.01, currency="RUB", trading_open=True)
 
 
 @dataclass

@@ -201,3 +201,20 @@ def test_position_size_rejects_bad_costs(kw: dict) -> None:
     args = {"capital": 1000, "risk_pct": 1, "entry": 100, "stop": 90, **kw}
     with pytest.raises(ValueError):
         position_size(**args)
+
+
+def test_position_size_bond_price_is_percent_of_face_and_accrued_is_paid() -> None:
+    # ОФЗ: цена 51.152% от номинала 1000 = 511.52 руб. за бумагу; стоп 49% = 490 руб.
+    p = position_size(100_000, 1, entry=51.152, stop=49.0, unit_value=10.0, accrued=23.15)
+    assert p.qty == 46  # 1000 / (2.152 * 10) = 46.47
+    assert p.risk_amount == pytest.approx(46 * 21.52, abs=0.01)  # НКД в потерю по стопу не входит
+    assert p.cost == pytest.approx(46 * (511.52 + 23.15), abs=0.01)
+
+
+def test_position_size_respects_exchange_minimums() -> None:
+    tiny = position_size(1_000, 0.1, entry=60_000, stop=59_000, qty_step=1e-8, min_qty=1e-3)  # ровно минимум — допустимо
+    assert tiny.qty == pytest.approx(0.001) and tiny.warning is None
+    below = position_size(1_000, 0.05, entry=60_000, stop=59_000, qty_step=1e-8, min_qty=1e-3)  # 0.0005 BTC
+    assert below.qty == 0 and below.warning and "минимальной заявки" in below.warning
+    cost = position_size(100_000, 0.001, entry=100, stop=99, min_cost=500)  # 1 шт. = 100 < 500
+    assert cost.qty == 0 and cost.warning and "минимальной заявки" in cost.warning

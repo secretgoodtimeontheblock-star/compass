@@ -113,14 +113,16 @@ function SignalCard({
             {risk.lot_size > 1 ? ` (${fmtNum(risk.lots, 0)} лот. по ${risk.lot_size})` : ""}
           </dd>
           <dt>Вход обойдётся</dt>
-          <dd>{fmtNum(risk.cost)}</dd>
+          <dd>{fmtNum(risk.cost)}{risk.currency ? ` ${risk.currency}` : ""}</dd>
           <dt>Расчётная потеря при стопе</dt>
           <dd>{fmtNum(risk.risk_amount)}</dd>
           <dt>При худшем исполнении</dt>
           <dd>{fmtNum(risk.risk_amount_worse)}</dd>
         </dl>
       )}
-      {risk?.warning && <div className="notice" style={{ marginTop: 6 }}>{risk.warning}</div>}
+      {risk?.warnings.map((w) => (
+        <div key={w} className="notice" style={{ marginTop: 6 }}>{w}</div>
+      ))}
       {risk && (
         <p className="caveat" style={{ marginTop: 6 }}>{risk.assumptions.join(" ")}</p>
       )}

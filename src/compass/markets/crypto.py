@@ -11,7 +11,7 @@ import ccxt
 
 from compass.catalog import match_instruments, okx_catalog
 from compass.markets.base import MarketError
-from compass.models import TIMEFRAME_MS, Candle, Instrument
+from compass.models import TIMEFRAME_MS, Candle, Instrument, InstrumentInfo
 
 _TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 _PAGE = 500  # безопасный размер страницы для большинства бирж
@@ -66,6 +66,26 @@ class CryptoAdapter:
             raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
         return sorted(out.values(), key=lambda c: c.ts)[-limit:]
 
+    def instrument_info(self, symbol: str) -> InstrumentInfo:
+        """Шаги и минимумы — из данных биржи (ccxt load_markets), а не из общей константы."""
+        try:
+            m = self._ex.load_markets().get(symbol)
+        except ccxt.BaseError as e:
+            raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
+        if not m or not m.get("spot"):
+            raise MarketError(f"Спотовой пары {symbol} нет на бирже {self._ex.id}")
+        mode = getattr(self._ex, "precisionMode", None)
+        prec, limits = m.get("precision") or {}, m.get("limits") or {}
+        return InstrumentInfo(
+            symbol, self.id, self.source_id,
+            qty_step=_step(prec.get("amount"), mode),
+            price_step=_step(prec.get("price"), mode),
+            currency=m.get("quote"),
+            min_qty=_positive((limits.get("amount") or {}).get("min")),
+            min_cost=_positive((limits.get("cost") or {}).get("min")),
+            trading_open=m.get("active"),
+        )
+
     def catalog_size(self) -> int:
         return len(self._catalog)
 
@@ -83,3 +103,18 @@ class CryptoAdapter:
             if m.get("spot") and m.get("active", True) and q in m["symbol"].upper()
         ]
         return sorted(res, key=lambda i: i.symbol)[:20]
+
+
+def _positive(v: Any) -> float | None:
+    return float(v) if isinstance(v, int | float) and v > 0 else None
+
+
+def _step(v: Any, mode: Any) -> float | None:
+    """ccxt отдаёт точность тремя способами; неизвестный способ — лучше None, чем неверный шаг."""
+    if not isinstance(v, int | float) or v <= 0:
+        return None
+    if mode == ccxt.TICK_SIZE:
+        return float(v)
+    if mode == ccxt.DECIMAL_PLACES:
+        return 10.0 ** -int(v)
+    return None

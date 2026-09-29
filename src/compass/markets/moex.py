@@ -16,7 +16,7 @@ import httpx
 
 from compass.catalog import match_instruments, moex_catalog
 from compass.markets.base import MarketError
-from compass.models import TIMEFRAME_MS, Candle, Instrument
+from compass.models import TIMEFRAME_MS, Candle, Instrument, InstrumentInfo
 
 ISS = "https://iss.moex.com/iss"
 MSK = timezone(timedelta(hours=3))
@@ -126,6 +126,35 @@ class MoexAdapter:
             raise MarketError(f"Тикер {symbol} не найден на МосБирже")
         return int(rows[0][block["columns"].index("LOTSIZE")])
 
+    def instrument_info(self, symbol: str) -> InstrumentInfo:
+        """Лот, шаг цены, валюта, номинал/НКД облигаций и режим торгов — из ISS.
+        Если ISS недоступен, а лот есть в справочнике, возвращаем только лот с complete=False."""
+        row = self._catalog.get(symbol)
+        engine, market, board = self._locate(symbol)
+        try:
+            data = self._get(f"/engines/{engine}/markets/{market}/boards/{board}/securities/{symbol}.json", {})
+        except MarketError:
+            if row and row.get("lot"):
+                return InstrumentInfo(symbol, self.id, self.source_id, lot=int(row["lot"]), complete=False)
+            raise
+        sec = _first_row(data.get("securities"))
+        if sec is None:
+            raise MarketError(f"Тикер {symbol} не найден на МосБирже")
+        md = _first_row(data.get("marketdata")) or {}
+        status = md.get("TRADINGSTATUS")
+        is_bond = market == "bonds" or (row or {}).get("kind") == "bond"
+        currency = sec.get("CURRENCYID") or sec.get("FACEUNIT")
+        return InstrumentInfo(
+            symbol, self.id, self.source_id,
+            lot=int(sec.get("LOTSIZE") or (row or {}).get("lot") or 1),
+            price_step=_num(sec.get("MINSTEP")),
+            currency={"SUR": "RUB", "SUR ": "RUB"}.get(currency, currency),
+            face_value=_num(sec.get("FACEVALUE")) if is_bond else None,
+            accrued=_num(sec.get("ACCRUEDINT")) if is_bond else None,
+            price_unit="percent_of_face" if is_bond else "money",
+            trading_open=None if status is None else status == "T",
+        )
+
     def search(self, query: str) -> list[Instrument]:
         if self._catalog:
             return match_instruments(self._catalog.values(), query, self.id)
@@ -140,3 +169,16 @@ class MoexAdapter:
             if row[idx["group"]] == "stock_shares" and row[idx["is_traded"]] == 1:
                 res.append(Instrument(row[idx["secid"]], row[idx["shortname"]], self.id))
         return res
+
+
+def _first_row(block: dict | None) -> dict | None:
+    if not block or not block.get("data"):
+        return None
+    return dict(zip(block["columns"], block["data"][0], strict=False))
+
+
+def _num(v) -> float | None:
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None

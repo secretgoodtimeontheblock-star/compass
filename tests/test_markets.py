@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ccxt
 import httpx
 import pytest
 
@@ -144,3 +145,60 @@ def test_catalog_search_ranks_ticker_above_name() -> None:
 def test_crypto_search_spot_only() -> None:
     a = CryptoAdapter(exchange=FakeExchange([]))
     assert [i.symbol for i in a.search("btc")] == ["BTC/USDT"]
+
+
+def _moex_info_json(**over) -> dict:
+    sec = {"SECID": "SBER", "LOTSIZE": 1, "MINSTEP": 0.01, "DECIMALS": 2, "CURRENCYID": "SUR", "FACEUNIT": "SUR",
+           "FACEVALUE": 3, "STATUS": "A", **over}
+    md = {"BOARDID": "TQBR", "TRADINGSTATUS": over.pop("_status", "T")}
+    return {
+        "securities": {"columns": list(sec), "data": [list(sec.values())]},
+        "marketdata": {"columns": list(md), "data": [list(md.values())]},
+    }
+
+
+def test_moex_instrument_info_reads_lot_step_currency_and_status() -> None:
+    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_moex_info_json()))),
+                    catalog=[])
+    info = a.instrument_info("SBER")
+    assert (info.lot, info.price_step, info.currency, info.trading_open) == (1, 0.01, "RUB", True)
+    assert info.price_unit == "money" and info.complete and info.source == "moex:iss"
+    closed = MoexAdapter(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_moex_info_json() | {
+            "marketdata": {"columns": ["BOARDID", "TRADINGSTATUS"], "data": [["TQBR", "N"]]}}))), catalog=[])
+    assert closed.instrument_info("SBER").trading_open is False
+
+
+def test_moex_bond_price_is_percent_of_face_with_accrued() -> None:
+    body = _moex_info_json(SECID="SU26238RMFS4", FACEVALUE=1000, ACCRUEDINT=23.15, MINSTEP=0.001, DECIMALS=3)
+    cat = [{"symbol": "SU26238RMFS4", "lot": 1, "engine": "stock", "market": "bonds", "board": "TQOB", "kind": "bond"}]
+    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))), catalog=cat)
+    info = a.instrument_info("SU26238RMFS4")
+    assert info.price_unit == "percent_of_face" and info.face_value == 1000 and info.accrued == 23.15
+
+
+def test_moex_info_falls_back_to_catalog_lot_and_says_incomplete() -> None:
+    def down(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    cat = [{"symbol": "GAZP", "lot": 10, "engine": "stock", "market": "shares", "board": "TQBR", "kind": "share"}]
+    info = MoexAdapter(httpx.Client(transport=httpx.MockTransport(down)), catalog=cat).instrument_info("GAZP")
+    assert info.lot == 10 and not info.complete and info.price_step is None and info.currency is None
+    with pytest.raises(MarketError):
+        MoexAdapter(httpx.Client(transport=httpx.MockTransport(down)), catalog=[]).instrument_info("ZZZZ")
+
+
+class InfoExchange(FakeExchange):
+    precisionMode = ccxt.TICK_SIZE
+
+    def load_markets(self):
+        return {"BTC/USDT": {"symbol": "BTC/USDT", "spot": True, "quote": "USDT", "active": True,
+                             "precision": {"amount": 1e-08, "price": 0.1},
+                             "limits": {"amount": {"min": 1e-05}, "cost": {"min": 5.0}}}}
+
+
+def test_crypto_instrument_info_uses_exchange_precision_and_minimums() -> None:
+    info = CryptoAdapter(exchange=InfoExchange([])).instrument_info("BTC/USDT")
+    assert (info.qty_step, info.price_step, info.min_qty, info.min_cost, info.currency) == (1e-08, 0.1, 1e-05, 5.0, "USDT")
+    with pytest.raises(MarketError):
+        CryptoAdapter(exchange=InfoExchange([])).instrument_info("NOPE/USDT")

@@ -168,6 +168,8 @@ export interface RiskResponse {
   budget: number;
   capped: boolean;
   warning: string | null;
+  warnings: string[];
+  currency: string | null;
   lot_size: number;
   fee_pct: number;
   slippage_pct: number;

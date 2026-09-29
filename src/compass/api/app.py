@@ -26,7 +26,7 @@ from compass.data_quality import check_candles
 from compass.journal import Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
-from compass.models import Instrument, closed_candles
+from compass.models import Instrument, InstrumentInfo, closed_candles
 from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
@@ -303,30 +303,72 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
 
     # --- риск и настройки ---
 
+    def instrument_info(market: str, symbol: str) -> InstrumentInfo:
+        a = adapter(market)
+        fn = getattr(a, "instrument_info", None)
+        source = getattr(a, "source_id", market)
+        if fn is None:
+            return InstrumentInfo(symbol, market, source, complete=False)
+        try:
+            return fn(symbol)
+        except MarketError:
+            if market == "moex":
+                raise  # неизвестный тикер или ISS недоступен без справочника — гадать лот нельзя
+            return InstrumentInfo(symbol, market, source, qty_step=CRYPTO_QTY_STEP, complete=False)
+
+    @app.get("/api/instrument")
+    def instrument(market: str, symbol: str) -> dict:
+        return asdict(instrument_info(market, symbol))
+
     @app.post("/api/risk")
     def risk(req: RiskRequest) -> dict:
-        a = adapter(req.market)
+        info = instrument_info(req.market, req.symbol)
         cfg = svc.settings.all()
-        lot_fn = getattr(a, "lot_size", None)
         fee = req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1)
         slip = req.slippage_pct if req.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
-        lot = lot_fn(req.symbol) if lot_fn else 1
+        bond = info.price_unit == "percent_of_face"
+        if bond and not info.face_value:
+            raise ValueError("Для облигации не получен номинал: посчитать размер позиции нельзя")
+        is_crypto = req.market == "crypto"
         p = position_size(
             req.capital if req.capital is not None else cfg["capital"],
             req.risk_pct if req.risk_pct is not None else cfg["risk_pct"],
             req.entry,
             req.stop,
-            lot=lot,
-            qty_step=None if lot_fn else CRYPTO_QTY_STEP,
+            lot=info.lot,
+            qty_step=(info.qty_step or CRYPTO_QTY_STEP) if is_crypto else None,
             fee_pct=fee,
             slippage_pct=slip,
             available=req.available,
+            unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
+            accrued=info.accrued or 0.0,
+            min_qty=info.min_qty,
+            min_cost=info.min_cost,
         )
+        warnings = [w for w in (p.warning,) if w]
+        if not info.complete:
+            warnings.append(
+                "Параметры инструмента получены не полностью"
+                + (f": шаг количества взят {CRYPTO_QTY_STEP:g} по умолчанию" if is_crypto else "")
+                + ". Проверьте лот, шаг цены и минимальную заявку у брокера."
+            )
+        if info.trading_open is False:
+            warnings.append("По данным биржи торги по инструменту сейчас не идут: цена может быть вчерашней.")
+        for label, price in (("входа", req.entry), ("стопа", req.stop)):
+            if info.price_step and abs(price / info.price_step - round(price / info.price_step)) > 1e-6:
+                warnings.append(f"Цена {label} не кратна шагу цены {info.price_step:g}: биржа её не примет.")
+        if bond:
+            warnings.append(
+                "Облигация: цена в % от номинала; накопленный купонный доход входит в стоимость покупки, "
+                "но не в расчёт потери при стопе."
+            )
         return {
             **asdict(p),
-            "lot_size": lot,
+            "lot_size": info.lot,
+            "currency": info.currency,
             "fee_pct": fee,
             "slippage_pct": slip,
+            "warnings": warnings,
             "assumptions": [
                 "Потеря при стопе — расчётный сценарий, а не гарантированный максимум: цена может пройти стоп гэпом.",
                 (
