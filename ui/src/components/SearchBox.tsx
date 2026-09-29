@@ -16,6 +16,7 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
 
   // поиск с паузой 300 мс; устаревший ответ (пользователь уже дописал) отбрасываем
@@ -46,6 +47,8 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
       clearTimeout(id);
     };
   }, [q, market]);
+
+  useEffect(() => setActive(0), [q, results]);
 
   useEffect(() => {
     setQ("");
@@ -84,8 +87,14 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && results[0]) pick(results[0]);
-          if (e.key === "Escape") setOpen(false);
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive((i) => Math.min(i + 1, Math.max(results.length - 1, 0)));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((i) => Math.max(i - 1, 0));
+          } else if (e.key === "Enter" && results[active]) pick(results[active]);
+          else if (e.key === "Escape") setOpen(false);
         }}
       />
       {open && q.trim() && (
@@ -93,8 +102,15 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
           {busy && <div className="empty">Ищем…</div>}
           {error && <div className="empty down">{error}</div>}
           {!busy && !error && results.length === 0 && <div className="empty">Ничего не найдено</div>}
-          {results.map((r) => (
-            <button key={r.symbol} onClick={() => pick(r)} role="option">
+          {results.map((r, index) => (
+            <button
+              key={r.symbol}
+              className={index === active ? "active" : undefined}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => pick(r)}
+              role="option"
+              aria-selected={index === active}
+            >
               <b>{r.symbol}</b>
               <span className="muted">
                 {[KIND[r.kind ?? ""], r.name !== r.symbol ? r.name : ""].filter(Boolean).join(" · ")}

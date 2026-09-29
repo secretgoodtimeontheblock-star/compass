@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "compass"
-version = "0.1.0"
+version = "0.1.1"
 description = "Лёгкий десктопный помощник трейдера: МосБиржа + крипта, сигналы, бэктест, журнал, AI-разбор. Без автоторговли."
 requires-python = ">=3.11"
 dependencies = [

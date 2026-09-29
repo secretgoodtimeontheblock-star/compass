@@ -374,7 +374,8 @@ textarea {
   text-align: left;
 }
 .search-results button:hover,
-.search-results button:focus-visible {
+.search-results button:focus-visible,
+.search-results button.active {
   background: var(--accent-bg);
 }
 .search-results button span {
@@ -439,8 +440,9 @@ textarea {
   font-weight: 700;
 }
 .chart-head .price {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 .overlays {
   display: flex;

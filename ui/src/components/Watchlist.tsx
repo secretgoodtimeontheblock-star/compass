@@ -7,6 +7,8 @@ const QUICK: Record<MarketId, Instrument[]> = {
     { market: "moex", symbol: "GAZP", name: "Газпром" },
     { market: "moex", symbol: "LKOH", name: "Лукойл" },
     { market: "moex", symbol: "YDEX", name: "Яндекс" },
+    { market: "moex", symbol: "TMOS", name: "БПИФ акций" },
+    { market: "moex", symbol: "USD000UTSTOM", name: "Доллар" },
   ],
   crypto: [
     { market: "crypto", symbol: "BTC/USDT", name: "BTC/USDT" },
