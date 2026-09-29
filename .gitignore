@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.spec
+node_modules/
+# локальные данные пользователя: кэш свечей, журнал, настройки
+data/
+*.sqlite3
+.env
