@@ -96,12 +96,46 @@ export interface RiskResponse {
   lot_size: number;
 }
 
+export type AiProviderId = "off" | "cursor" | "claude" | "ollama";
+
 export interface Settings {
   capital: number;
   risk_pct: number;
   scan_interval_min: number;
   tf_moex: string;
   tf_crypto: string;
+  ai_provider: AiProviderId;
+  ai_models: Partial<Record<AiProviderId, string>>;
+  ai_consent: string;
+}
+
+export interface AiStatus {
+  provider: AiProviderId;
+  model: string | null;
+  cloud: boolean | null;
+  available: boolean;
+  reason: string;
+  consent: boolean;
+}
+
+export interface AiProviderInfo {
+  id: Exclude<AiProviderId, "off">;
+  name: string;
+  cloud: boolean;
+  default_model: string;
+}
+
+export interface AiModel {
+  id: string;
+  label: string;
+}
+
+export interface AiResult {
+  text: string;
+  provider: string;
+  model: string;
+  cached: boolean;
+  warnings: string[];
 }
 
 export interface JournalEntry {

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api } from "../api";
+import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, STRATEGY_SHORT } from "../lib/format";
 import type { Instrument, RiskResponse, Signal } from "../types";
+import { AiAnswer } from "./AiAnswer";
 
 interface Props {
   signals: Signal[];
@@ -43,6 +45,8 @@ export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkS
 }
 
 function SignalCard({ s, onSelect }: { s: Signal; onSelect: (i: Instrument) => void }) {
+  const ai = useAiRun();
+  const explain = (refresh = false) => void ai.run((r) => api.explainSignal(s.id, r), refresh);
   const [risk, setRisk] = useState<RiskResponse>();
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -111,6 +115,12 @@ function SignalCard({ s, onSelect }: { s: Signal; onSelect: (i: Instrument) => v
           )}
         </dl>
       )}
+      {!ai.result && (
+        <button className="btn small" style={{ marginTop: 8, marginLeft: buy && s.stop != null && !risk ? 6 : 0 }} disabled={ai.busy} onClick={() => explain()}>
+          {ai.busy ? "AI думает…" : ai.error ? "Повторить" : "Объяснить простыми словами"}
+        </button>
+      )}
+      <AiAnswer ai={ai} onRefresh={() => explain(true)} />
     </div>
   );
 }

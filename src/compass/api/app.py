@@ -14,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from compass import __version__
+from compass.ai.service import AiService
+from compass.api.ai_routes import register_ai_routes
 from compass.backtest import backtest
 from compass.cache import CandleCache
 from compass.journal import Entry, Journal
@@ -39,6 +41,7 @@ class Services:
     signals: SignalStore
     engine: SignalEngine
     journal: Journal
+    ai: AiService
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
 
 
@@ -255,6 +258,8 @@ def create_app(svc: Services) -> FastAPI:
     def journal_remove(entry_id: int) -> None:
         if not svc.journal.remove(entry_id):
             raise HTTPException(404, "Записи нет в журнале")
+
+    register_ai_routes(app, svc)
 
     # Интерфейс — последним: маршруты /api/* должны матчиться раньше статики.
     if STATIC_DIR.is_dir():

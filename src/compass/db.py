@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _V1 = """
 CREATE TABLE candles (
@@ -62,6 +62,16 @@ CREATE INDEX journal_symbol ON journal (market, symbol, ts);
 """
 
 
+_V4 = """
+CREATE TABLE ai_cache (
+  key TEXT PRIMARY KEY,         -- sha256(провайдер, модель, задача, запрос): те же данные — тот же ответ
+  provider TEXT NOT NULL, model TEXT NOT NULL,
+  response TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX ai_cache_created ON ai_cache (created_at DESC);
+"""
+
+
 def connect(path: Path | str) -> sqlite3.Connection:
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -92,4 +102,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 3:
         conn.executescript(_V3)
         conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+    if version < 4:
+        conn.executescript(_V4)
+        conn.execute("PRAGMA user_version = 4")
         conn.commit()

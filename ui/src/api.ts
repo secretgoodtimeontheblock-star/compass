@@ -1,4 +1,8 @@
 import type {
+  AiModel,
+  AiProviderInfo,
+  AiResult,
+  AiStatus,
   BacktestResponse,
   CandlesResponse,
   Instrument,
@@ -17,6 +21,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** машинный код ошибки AI: off | consent | busy | auth | ai_error … */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -46,7 +52,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ApiError(detailText(body, `Ошибка ${res.status}`), res.status);
+    const code = typeof (body as { code?: unknown } | null)?.code === "string" ? (body as { code: string }).code : undefined;
+    throw new ApiError(detailText(body, `Ошибка ${res.status}`), res.status, code);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
@@ -92,6 +99,16 @@ export const api = {
     request<RiskResponse>("/api/risk", json("POST", b)),
   settings: () => request<Settings>("/api/settings"),
   saveSettings: (s: Partial<Settings>) => request<Settings>("/api/settings", json("PUT", s)),
+
+  aiStatus: () => request<AiStatus>("/api/ai/status"),
+  aiProviders: () => request<AiProviderInfo[]>("/api/ai/providers"),
+  aiModels: (provider: string) => request<AiModel[]>(`/api/ai/providers/${provider}/models`),
+  explainSignal: (signalId: number, refresh = false) =>
+    request<AiResult>("/api/ai/explain-signal", json("POST", { signal_id: signalId, refresh })),
+  reviewJournal: (p: { market?: MarketId; symbol?: string }, refresh = false) =>
+    request<AiResult>("/api/ai/review-journal", json("POST", { ...p, refresh })),
+  aiAsk: (p: { question: string; market?: MarketId; symbol?: string; tf?: string }, refresh = false) =>
+    request<AiResult>("/api/ai/ask", json("POST", { ...p, refresh })),
 
   journal: (p: { market?: MarketId; symbol?: string } = {}) =>
     request<JournalEntry[]>(`/api/journal?${qs(p)}`),

@@ -86,10 +86,10 @@ def test_v1_database_is_migrated_to_latest(tmp_path) -> None:
     c.commit()
     c.close()
     conn = connect(p)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0] == 1  # данные целы
-    conn.execute("SELECT COUNT(*) FROM signals")  # таблицы новых версий появились
-    conn.execute("SELECT COUNT(*) FROM journal")
+    for table in ("signals", "settings", "journal", "ai_cache"):  # таблицы новых версий появились
+        conn.execute(f"SELECT COUNT(*) FROM {table}")
 
 
 def test_api_candles_watchlist_and_errors(env: Env) -> None:

@@ -6,6 +6,8 @@ import logging
 
 import uvicorn
 
+from compass.ai.providers import ClaudeProvider, CursorProvider, OllamaProvider
+from compass.ai.service import AiService
 from compass.api.app import Services, create_app
 from compass.cache import CandleCache
 from compass.config import Config
@@ -30,8 +32,14 @@ def build_services(cfg: Config, background_scan: bool = True) -> Services:
     settings = Settings(conn, {k: a.timeframes for k, a in adapters.items()})
     store = SignalStore(conn)
     engine = SignalEngine(cache, watchlist, settings, store, CompositeNotifier(TelegramNotifier()))
+    providers = {
+        "cursor": CursorProvider(cfg.data_dir / "ai-workdir"),
+        "claude": ClaudeProvider(),
+        "ollama": OllamaProvider(),
+    }
+    ai = AiService(providers, settings, conn)
     scanner = BackgroundScanner(engine, settings) if background_scan else None
-    return Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), scanner)
+    return Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, scanner)
 
 
 def main() -> None:

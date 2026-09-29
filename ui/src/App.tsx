@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { AiPanel } from "./components/AiPanel";
 import { BacktestPanel } from "./components/BacktestPanel";
+import { ConsentDialog } from "./components/ConsentDialog";
 import { JournalPanel } from "./components/JournalPanel";
 import { type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SignalsPanel } from "./components/SignalsPanel";
 import { Watchlist } from "./components/Watchlist";
+import { AiContext } from "./lib/ai-context";
 import { fmtPct, fmtPrice, pnlClass } from "./lib/format";
 import { loadPref, savePref, useApi } from "./lib/use-api";
-import type { Instrument, MarketId, Settings, Signal } from "./types";
+import type { AiStatus, Instrument, MarketId, Settings, Signal } from "./types";
 
-type Tab = "signals" | "backtest" | "journal";
+type Tab = "signals" | "backtest" | "journal" | "ai";
 type Toast = { id: number; title: string; text: string };
 
 const MARKET_LABEL: Record<MarketId, string> = { moex: "Акции МосБиржи", crypto: "Крипта" };
@@ -63,6 +66,20 @@ export default function App() {
   const watchApi = useApi(() => api.watchlist(), []);
   const signalsApi = useApi(() => api.signals({ limit: 200 }), [], 30_000);
   const positionsApi = useApi(() => api.positions(), []);
+  const aiStatusApi = useApi(() => api.aiStatus(), []);
+
+  // AI: согласие на отправку данных запрашивается в момент первого обращения, а не «на всякий случай»
+  const [consent, setConsent] = useState<{ status: AiStatus; resolve: (ok: boolean) => void }>();
+  const aiCtx = useMemo(
+    () => ({
+      requestConsent: async () => {
+        const status = await api.aiStatus();
+        return new Promise<boolean>((resolve) => setConsent({ status, resolve }));
+      },
+      openSettings: () => setSettingsOpen(true),
+    }),
+    [],
+  );
 
   const markets = marketsApi.data ?? [];
   const settings = settingsOverride ?? settingsApi.data;
@@ -178,6 +195,7 @@ export default function App() {
   const change = last && prev ? ((last.c / prev.c - 1) * 100) : undefined;
 
   return (
+    <AiContext.Provider value={aiCtx}>
     <div className="app">
       <header className="topbar">
         <div className="brand">
@@ -312,6 +330,7 @@ export default function App() {
                 ["signals", "Сигналы"],
                 ["backtest", "Проверка"],
                 ["journal", "Журнал"],
+                ["ai", "AI"],
               ] as const
             ).map(([k, label]) => (
               <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
@@ -350,6 +369,7 @@ export default function App() {
               onSelect={selectInstrument}
             />
           )}
+          {tab === "ai" && <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />}
         </aside>
       </div>
 
@@ -367,6 +387,28 @@ export default function App() {
           onSaved={(s) => {
             setSettingsOverride(s);
             settingsApi.reload();
+            aiStatusApi.reload();
+          }}
+        />
+      )}
+
+      {consent && (
+        <ConsentDialog
+          status={consent.status}
+          onDecline={() => {
+            consent.resolve(false);
+            setConsent(undefined);
+          }}
+          onAccept={async () => {
+            try {
+              setSettingsOverride(await api.saveSettings({ ai_consent: consent.status.provider }));
+              aiStatusApi.reload();
+              consent.resolve(true);
+            } catch (e) {
+              pushToast("Не удалось сохранить согласие", e instanceof Error ? e.message : "Ошибка");
+              consent.resolve(false);
+            }
+            setConsent(undefined);
           }}
         />
       )}
@@ -380,6 +422,7 @@ export default function App() {
         ))}
       </div>
     </div>
+    </AiContext.Provider>
   );
 }
 

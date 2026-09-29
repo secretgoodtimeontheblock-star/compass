@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api } from "../api";
+import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
 import type { Instrument, JournalEntry, Position } from "../types";
+import { AiAnswer } from "./AiAnswer";
 
 interface Props {
   instrument: Instrument | undefined;
@@ -13,6 +15,8 @@ interface Props {
 }
 
 export function JournalPanel({ instrument, entries, positions, lastPrice, onChanged, onSelect }: Props) {
+  const ai = useAiRun();
+  const review = (refresh = false) => void ai.run((r) => api.reviewJournal({}, r), refresh);
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [qty, setQty] = useState("");
   const [price, setPrice] = useState("");
@@ -99,6 +103,17 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
             ))}
           </tbody>
         </table>
+      )}
+
+      {positions.length > 0 && (
+        <div style={{ padding: "8px 12px 0" }}>
+          {!ai.result && (
+            <button className="btn" disabled={ai.busy} onClick={() => review()}>
+              {ai.busy ? "AI разбирает…" : ai.error ? "Повторить" : "Разобрать журнал с AI"}
+            </button>
+          )}
+          <AiAnswer ai={ai} onRefresh={() => review(true)} />
+        </div>
       )}
 
       {instrument ? (

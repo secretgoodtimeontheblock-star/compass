@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import pytest
 
+from compass.ai.providers import ModelInfo
+from compass.ai.service import AiService
 from compass.api.app import Services
 from compass.cache import CandleCache
 from compass.db import connect
@@ -59,12 +62,39 @@ class RecordingNotifier:
         self.sent.append(signal)
 
 
+class FakeProvider:
+    """Провайдер AI без сети: отдаёт заданный ответ и считает вызовы."""
+
+    def __init__(self, pid: str, cloud: bool, reply: str = "Ответ AI. Решение остаётся за вами.") -> None:
+        self.id, self.name, self.cloud, self.default_model = pid, f"fake-{pid}", cloud, "m1"
+        self.reply = reply
+        self.calls: list[tuple[str, str, str]] = []  # (system, prompt, model)
+        self.error: Exception | None = None
+        self.gate: threading.Event | None = None  # если задан — ask() ждёт (проверка параллельности)
+
+    def available(self) -> tuple[bool, str]:
+        return True, ""
+
+    def models(self) -> list[ModelInfo]:
+        return [ModelInfo("m1", "Модель 1"), ModelInfo("m2", "Модель 2")]
+
+    def ask(self, system: str, prompt: str, model: str) -> str:
+        self.calls.append((system, prompt, model))
+        if self.gate:
+            self.gate.wait(5)
+        if self.error:
+            raise self.error
+        return self.reply
+
+
 @dataclass
 class Env:
     services: Services
     adapter: ScriptedAdapter
     notifier: RecordingNotifier
     now: list[int]  # изменяемые «часы»: now[0] — текущее время, мс
+    cloud: FakeProvider  # зарегистрирован как «cursor» (облачный)
+    local: FakeProvider  # зарегистрирован как «ollama» (локальный)
 
 
 @pytest.fixture
@@ -79,8 +109,10 @@ def env() -> Env:
     notifier = RecordingNotifier()
     now = [10_000 * DAY]
     engine = SignalEngine(cache, watchlist, settings, store, notifier, now_ms=lambda: now[0])
-    svc = Services(adapters, cache, watchlist, settings, store, engine, Journal(conn))
-    return Env(svc, adapter, notifier, now)
+    cloud, local = FakeProvider("cursor", cloud=True), FakeProvider("ollama", cloud=False)
+    ai = AiService({"cursor": cloud, "ollama": local}, settings, conn, slot_wait_s=0.05)
+    svc = Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai)
+    return Env(svc, adapter, notifier, now, cloud, local)
 
 
 def _unused() -> None:  # держим импорт MarketError доступным тестам через conftest

@@ -91,6 +91,15 @@ class SignalStore:
             rows = self._conn.execute(sql, (*args, limit)).fetchall()
         return [Signal(*r[:10], seen=bool(r[10])) for r in rows]
 
+    def get(self, signal_id: int) -> Signal | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen "
+                "FROM signals WHERE id = ?",
+                (signal_id,),
+            ).fetchone()
+        return Signal(*row[:10], seen=bool(row[10])) if row else None
+
     def mark_all_seen(self) -> int:
         with self._lock, self._conn:
             return self._conn.execute("UPDATE signals SET seen = 1 WHERE seen = 0").rowcount

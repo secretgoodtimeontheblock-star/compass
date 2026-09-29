@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Market, Settings } from "../types";
+import type { AiModel, AiProviderId, Market, Settings } from "../types";
 
 interface Props {
   settings: Settings;
@@ -17,9 +17,31 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
     tf_moex: settings.tf_moex,
     tf_crypto: settings.tf_crypto,
   });
+  const [aiProvider, setAiProvider] = useState<AiProviderId>(settings.ai_provider);
+  const [aiModels, setAiModels] = useState<Partial<Record<AiProviderId, string>>>(settings.ai_models ?? {});
+  const [modelList, setModelList] = useState<AiModel[]>([]);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsError, setModelsError] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const first = useRef<HTMLInputElement>(null);
+
+  // список моделей выбранного провайдера (у Cursor это вызов CLI — несколько секунд)
+  useEffect(() => {
+    setModelList([]);
+    setModelsError(undefined);
+    if (aiProvider === "off") return;
+    let stale = false;
+    setModelsBusy(true);
+    api
+      .aiModels(aiProvider)
+      .then((m) => !stale && setModelList(m))
+      .catch((e) => !stale && setModelsError(e instanceof Error ? e.message : "Не удалось получить модели"))
+      .finally(() => !stale && setModelsBusy(false));
+    return () => {
+      stale = true;
+    };
+  }, [aiProvider]);
 
   useEffect(() => {
     first.current?.focus();
@@ -41,6 +63,8 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
           scan_interval_min: Number(draft.scan_interval_min),
           tf_moex: draft.tf_moex,
           tf_crypto: draft.tf_crypto,
+          ai_provider: aiProvider,
+          ai_models: aiModels,
         }),
       );
       onClose();
@@ -107,6 +131,45 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
         <p className="muted" style={{ fontSize: 12 }}>
           Риск 1–2% на сделку — общепринятая осторожная планка: размер позиции подбирается так, чтобы срабатывание
           стопа стоило не больше этой доли капитала.
+        </p>
+
+        <h2 style={{ marginTop: 16 }}>AI-помощник</h2>
+        <div className="form-grid" style={{ padding: 0 }}>
+          <label className="field">
+            <span>Провайдер</span>
+            <select value={aiProvider} onChange={(e) => setAiProvider(e.target.value as AiProviderId)}>
+              <option value="off">Выключен</option>
+              <option value="cursor">Cursor CLI</option>
+              <option value="claude">Claude API</option>
+              <option value="ollama">Ollama (локально)</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Модель{modelsBusy ? " (загрузка…)" : ""}</span>
+            <select
+              disabled={aiProvider === "off" || modelsBusy}
+              value={aiProvider === "off" ? "" : (aiModels[aiProvider] ?? "")}
+              onChange={(e) => aiProvider !== "off" && setAiModels({ ...aiModels, [aiProvider]: e.target.value })}
+            >
+              <option value="">По умолчанию</option>
+              {aiProvider !== "off" && aiModels[aiProvider] && !modelList.some((m) => m.id === aiModels[aiProvider]) && (
+                <option value={aiModels[aiProvider]}>{aiModels[aiProvider]}</option>
+              )}
+              {modelList.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {modelsError && <div className="notice" style={{ margin: "8px 0 0" }}>{modelsError}</div>}
+        <p className="muted" style={{ fontSize: 12 }}>
+          {aiProvider === "off" && "AI выключен: приложение работает без него."}
+          {aiProvider === "cursor" && "Cursor CLI работает в режиме «только чтение». Ответ занимает 15–30 секунд, нужен вход: cursor-agent login. Данные уходят в облако Cursor."}
+          {aiProvider === "claude" && "Нужен ключ ANTHROPIC_API_KEY в окружении (или вход через ant auth login). Данные уходят в Anthropic; оплата по тарифам API."}
+          {aiProvider === "ollama" && "Работает локально, данные не покидают компьютер. Нужна запущенная Ollama и скачанная модель."}
+          {aiProvider !== "off" && " Цены и размеры позиций считает приложение, а не модель."}
         </p>
         {error && <div className="error" style={{ margin: "8px 0 0" }}>{error}</div>}
         <div className="actions">
