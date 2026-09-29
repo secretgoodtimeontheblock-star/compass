@@ -5,6 +5,7 @@ import { BacktestPanel } from "./components/BacktestPanel";
 import { ConsentDialog } from "./components/ConsentDialog";
 import { DataStatus } from "./components/DataStatus";
 import { GettingStarted } from "./components/GettingStarted";
+import { Icon } from "./components/Icon";
 import { JournalPanel } from "./components/JournalPanel";
 import { type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
@@ -21,6 +22,13 @@ import type { AiStatus, Instrument, JournalDraft, MarketId, Settings, Signal } f
 
 type Tab = "signals" | "backtest" | "journal" | "ai";
 type Toast = { id: number; title: string; text: string };
+
+const TABS = [
+  ["signals", "Сигналы"],
+  ["backtest", "Проверка"],
+  ["journal", "Журнал"],
+  ["ai", "AI"],
+] as const;
 
 const MARKET_LABEL: Record<MarketId, string> = { moex: "Акции МосБиржи", crypto: "Крипта" };
 
@@ -60,11 +68,34 @@ export default function App() {
   useEffect(() => savePref("selected", JSON.stringify(selSymbol)), [selSymbol]);
   useEffect(() => savePref("overlays", JSON.stringify(overlays)), [overlays]);
 
+  const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const pushToast = useCallback((title: string, text: string) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, title, text }]);
+    setToasts((t) => [...t.slice(-3), { id, title, text }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
   }, []);
+
+  // Esc закрывает выдвижную панель (диалоги перехватывают Esc раньше)
+  useEffect(() => {
+    if (!rightOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setRightOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [rightOpen]);
+
+  const onTabKey = (e: React.KeyboardEvent) => {
+    const i = TABS.findIndex(([k]) => k === tab);
+    const next =
+      e.key === "ArrowRight" ? (i + 1) % TABS.length
+      : e.key === "ArrowLeft" ? (i - 1 + TABS.length) % TABS.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? TABS.length - 1
+      : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    setTab(TABS[next][0]);
+    document.getElementById(`tab-${TABS[next][0]}`)?.focus();
+  };
 
   // ---- данные ----
   const marketsApi = useApi(() => api.markets(), []);
@@ -193,12 +224,15 @@ export default function App() {
 
   if (marketsApi.error && !marketsApi.data) {
     return (
-      <div className="empty" style={{ padding: 40 }}>
-        <b>Не удалось связаться с движком Compass.</b>
-        <p>{marketsApi.error}</p>
-        <button className="btn primary" onClick={marketsApi.reload}>
-          Повторить
-        </button>
+      <div className="fatal" role="alert">
+        <div className="fatal-card">
+          <h1>Не удалось связаться с движком Compass</h1>
+          <p className="muted">{marketsApi.error}</p>
+          <p className="muted small-text">Проверьте, что приложение запущено, и повторите попытку.</p>
+          <button className="btn primary" onClick={marketsApi.reload}>
+            <Icon name="scan" /> Повторить
+          </button>
+        </div>
       </div>
     );
   }
@@ -210,6 +244,7 @@ export default function App() {
   return (
     <AiContext.Provider value={aiCtx}>
     <div className="app">
+      <a className="skip-link" href="#chart">К графику</a>
       <header className="topbar">
         <div className="brand">
           <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -227,18 +262,21 @@ export default function App() {
         </div>
         <SearchBox market={market} catalogSize={marketInfo?.instruments} onPick={addToWatch} />
         <div className="spacer" />
-        <button className="btn" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>С чего начать</button>
+        <button className="btn" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>
+          <Icon name="help" /> <span className="btn-label">С чего начать</span>
+        </button>
         <button className="btn primary" onClick={scan} disabled={scanBusy || items.length === 0 && (watchApi.data ?? []).length === 0}>
-          {scanBusy ? "Проверяем…" : "Проверить сигналы"}
+          <span className={scanBusy ? "spin" : undefined}><Icon name="scan" /></span>
+          <span className="btn-label">{scanBusy ? "Проверяем…" : "Проверить сигналы"}</span>
         </button>
-        <button className="btn" onClick={() => setRightOpen((o) => !o)} aria-label="Показать панель сигналов" style={{ display: "var(--narrow-btn, none)" }}>
-          Панель {unseen.length > 0 && <span className="badge">{unseen.length}</span>}
+        <button className="btn panel-toggle" onClick={() => setRightOpen((o) => !o)} aria-expanded={rightOpen} aria-controls="right-panel">
+          <Icon name="panel" /> <span className="btn-label">Панель</span> {unseen.length > 0 && <span className="badge" aria-label={`${unseen.length} непрочитанных`}>{unseen.length}</span>}
         </button>
-        <button className="btn ghost" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Сменить тему">
-          {theme === "dark" ? "☀" : "☾"}
+        <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"} title="Сменить тему">
+          <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
         </button>
-        <button className="btn ghost" onClick={() => setSettingsOpen(true)} aria-label="Настройки">
-          ⚙
+        <button className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Настройки" title="Настройки">
+          <Icon name="settings" size={18} />
         </button>
       </header>
 
@@ -310,10 +348,10 @@ export default function App() {
           <DataStatus
             market={marketInfo} state={live.feed?.state} message={live.feed?.message}
             receivedAt={live.feed?.receivedAt} fetchedAt={history?.fetched_at}
-            stale={!!history?.stale} hasData={candles.length > 0} gap={gap}
+            stale={!!history?.stale} hasData={candles.length > 0} gap={gap} quality={candlesApi.data?.quality}
             onRetry={() => { live.retry(); candlesApi.reload(); }}
           />
-          <div className="chart-wrap">
+          <div className="chart-wrap" id="chart" tabIndex={-1}>
             {candlesApi.loading && <div className="loading-bar" />}
             {selected ? (
               <PriceChart
@@ -353,21 +391,29 @@ export default function App() {
           </div>
         </main>
 
-        <aside className={`right${rightOpen ? " open" : ""}`} aria-label="Сигналы, проверка стратегий, журнал">
-          <div className="tabs" role="tablist">
-            {(
-              [
-                ["signals", "Сигналы"],
-                ["backtest", "Проверка"],
-                ["journal", "Журнал"],
-                ["ai", "AI"],
-              ] as const
-            ).map(([k, label]) => (
-              <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
-                {label} {k === "signals" && unseen.length > 0 && <span className="badge">{unseen.length}</span>}
-              </button>
-            ))}
+        {rightOpen && <div className="scrim" onClick={() => setRightOpen(false)} aria-hidden="true" />}
+        <aside id="right-panel" className={`right${rightOpen ? " open" : ""}`} aria-label="Сигналы, проверка стратегий, журнал">
+          <div className="tabs-row">
+            <div className="tabs" role="tablist" aria-label="Разделы панели" onKeyDown={onTabKey}>
+              {TABS.map(([k, label]) => (
+                <button
+                  key={k}
+                  id={`tab-${k}`}
+                  role="tab"
+                  aria-selected={tab === k}
+                  aria-controls={`panel-${k}`}
+                  tabIndex={tab === k ? 0 : -1}
+                  onClick={() => setTab(k)}
+                >
+                  {label} {k === "signals" && unseen.length > 0 && <span className="badge">{unseen.length}</span>}
+                </button>
+              ))}
+            </div>
+            <button className="icon-btn drawer-close" onClick={() => setRightOpen(false)} aria-label="Закрыть панель">
+              <Icon name="close" size={18} />
+            </button>
           </div>
+          <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab === "signals" && (
             <SignalsPanel
               signals={allSignals}
@@ -415,6 +461,7 @@ export default function App() {
             />
           )}
           {tab === "ai" && <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />}
+          </div>
         </aside>
       </div>
 
@@ -458,11 +505,16 @@ export default function App() {
         />
       )}
 
-      <div className="toasts" aria-live="polite">
+      <div className="toasts" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div className="toast" key={t.id}>
-            <b>{t.title}</b>
-            {t.text}
+            <div className="toast-body">
+              <b>{t.title}</b>
+              {t.text}
+            </div>
+            <button className="icon-btn" onClick={() => dismissToast(t.id)} aria-label="Закрыть уведомление">
+              <Icon name="close" size={14} />
+            </button>
           </div>
         ))}
       </div>

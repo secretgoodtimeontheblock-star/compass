@@ -201,6 +201,12 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
 
       {error && <div className="error">{error}</div>}
       {res?.stale && <div className="notice">Источник данных недоступен — расчёт по сохранённым данным.</div>}
+      {res && res.data_quality.status !== "ok" && (
+        <div className={res.data_quality.status === "error" ? "error" : "notice"}>
+          {res.data_quality.status === "error" ? "В данных есть ошибки — результату верить нельзя. " : "Проверка данных: "}
+          {res.data_quality.issues.map((i) => i.message).join(" ")}
+        </div>
+      )}
 
       {res?.warnings.map((w) => (
         <div key={w} className="notice">{w}</div>
@@ -293,16 +299,16 @@ function Robustness({ res }: { res: BacktestResponse }) {
               <tr>
                 <th>Период</th>
                 <th className="r">Стратегия</th>
-                <th className="r">Купил и держи</th>
+                <th className="r">Держать</th>
                 <th className="r">Просадка</th>
-                <th className="r">Сделок</th>
+                <th className="r">Сд.</th>
               </tr>
             </thead>
             <tbody>
               {wf.windows.map((w) => (
                 <tr key={w.start}>
                   <td>
-                    {fmtDate(w.start)} – {fmtDate(w.end)}
+                    {fmtDate(w.start)}–{fmtDate(w.end)}
                   </td>
                   <td className={`r ${pnlClass(w.return_pct)}`}>{fmtPct(w.return_pct)}</td>
                   <td className={`r ${pnlClass(w.buy_hold_pct)}`}>{fmtPct(w.buy_hold_pct)}</td>
@@ -325,7 +331,8 @@ function Robustness({ res }: { res: BacktestResponse }) {
           Ресэмплинг {rs.trades} сделок ({rs.simulations} прогонов): в прибыли{" "}
           <b>{fmtPct(rs.profitable_share_pct, 0, false)}</b> прогонов; типичный итог{" "}
           {fmtPct(rs.return_p50_pct)}, плохой сценарий (5%) {fmtPct(rs.return_p5_pct)}, при неудачном порядке
-          сделок просадка может дойти до {fmtPct(rs.drawdown_shuffled_p95_pct, 1, false)}.
+          сделок просадка по сделкам может дойти до {fmtPct(rs.drawdown_shuffled_p95_pct, 1, false)} (в плитках выше
+          просадка считается по кривой капитала, поэтому числа отличаются).
         </p>
       ) : (
         <p className="caveat">Сделок меньше пяти — ресэмплинг ничего не покажет.</p>

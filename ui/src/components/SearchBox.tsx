@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import type { Instrument, MarketId } from "../types";
+import { Icon } from "./Icon";
 
 interface Props {
   market: MarketId;
@@ -18,6 +19,8 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const listId = useId();
 
   // поиск с паузой 300 мс; устаревший ответ (пользователь уже дописал) отбрасываем
   useEffect(() => {
@@ -63,6 +66,19 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
+  // «/» — быстрый переход к поиску, как в большинстве веб-приложений; в полях ввода не срабатывает
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const pick = (i: Instrument) => {
     onPick(i);
     setQ("");
@@ -72,8 +88,15 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
 
   return (
     <div className="search" ref={root}>
+      <span className="search-icon"><Icon name="search" size={15} /></span>
       <input
+        ref={input}
         type="search"
+        role="combobox"
+        aria-expanded={open && !!q.trim()}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && results[active] ? `${listId}-${active}` : undefined}
         value={q}
         placeholder={
           market === "moex"
@@ -94,17 +117,22 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
             e.preventDefault();
             setActive((i) => Math.max(i - 1, 0));
           } else if (e.key === "Enter" && results[active]) pick(results[active]);
-          else if (e.key === "Escape") setOpen(false);
+          else if (e.key === "Escape") {
+            if (open) e.stopPropagation();
+            setOpen(false);
+          }
         }}
       />
       {open && q.trim() && (
-        <div className="search-results" role="listbox">
-          {busy && <div className="empty">Ищем…</div>}
+        <div className="search-results" role="listbox" id={listId}>
+          {busy && <div className="empty" role="status">Ищем…</div>}
           {error && <div className="empty down">{error}</div>}
           {!busy && !error && results.length === 0 && <div className="empty">Ничего не найдено</div>}
           {results.map((r, index) => (
             <button
               key={r.symbol}
+              id={`${listId}-${index}`}
+              tabIndex={-1}
               className={index === active ? "active" : undefined}
               onMouseEnter={() => setActive(index)}
               onClick={() => pick(r)}
@@ -119,6 +147,7 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
           ))}
         </div>
       )}
+      {!q && <kbd className="search-kbd" aria-hidden="true">/</kbd>}
     </div>
   );
 }

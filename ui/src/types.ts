@@ -28,8 +28,22 @@ export interface Candle {
   v: number;
 }
 
+export interface DataIssue {
+  code: string;
+  severity: "error" | "warning";
+  count: number;
+  message: string;
+}
+
+export interface DataQuality {
+  status: "ok" | "warning" | "error";
+  candles: number;
+  issues: DataIssue[];
+}
+
 export interface CandlesResponse {
   stale: boolean;
+  quality?: DataQuality;
   source: string;
   fetched_at: number | null;
   candles: Candle[];
@@ -137,9 +151,10 @@ export interface BacktestResponse {
   params: Record<string, number>;
   stale: boolean;
   metrics: BacktestMetrics;
-  warnings: string[];
   validation: { walk_forward: WalkForward | null; resampling: Resampling | null };
   run_card: RunCard;
+  data_quality: DataQuality;
+  warnings: string[];
   trades: Trade[];
   equity: { t: number; v: number }[];
 }

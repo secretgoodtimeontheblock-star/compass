@@ -1,4 +1,4 @@
-import type { LiveState, Market } from "../types";
+import type { DataQuality, LiveState, Market } from "../types";
 
 interface Props {
   market?: Market;
@@ -9,10 +9,11 @@ interface Props {
   stale: boolean;
   hasData: boolean;
   gap: boolean;
+  quality?: DataQuality;
   onRetry: () => void;
 }
 
-export function DataStatus({ market, state, message, receivedAt, fetchedAt, stale, hasData, gap, onRetry }: Props) {
+export function DataStatus({ market, state, message, receivedAt, fetchedAt, stale, hasData, gap, quality, onRetry }: Props) {
   const live = state === "live";
   const delayed = market?.id === "moex";
   const label = delayed ? "МосБиржа · задержка 15 мин"
@@ -37,6 +38,7 @@ export function DataStatus({ market, state, message, receivedAt, fetchedAt, stal
         {stale && " Историю не удалось обновить — показан сохранённый кэш."}
         {!hasData && " Ожидаем данные графика."}
         {gap && " В истории есть пропуски. Не используйте этот участок для проверки стратегии."}
+        {quality?.issues.filter((i) => !(gap && i.code === "gaps")).map((i) => ` ${i.message}`)}
       </div>
     </section>
   );

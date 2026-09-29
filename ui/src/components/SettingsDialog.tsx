@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AiModel, AiProviderId, Market, Settings } from "../types";
+import { Modal } from "./Modal";
 
 interface Props {
   settings: Settings;
@@ -24,7 +25,6 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
   const [modelsError, setModelsError] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const first = useRef<HTMLInputElement>(null);
 
   // список моделей выбранного провайдера (у Cursor это вызов CLI — несколько секунд)
   useEffect(() => {
@@ -42,13 +42,6 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
       stale = true;
     };
   }, [aiProvider]);
-
-  useEffect(() => {
-    first.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const tfs = (id: string) => markets.find((m) => m.id === id)?.timeframes ?? [];
 
@@ -76,14 +69,12 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
   };
 
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-label="Настройки">
-        <h2>Настройки</h2>
+    <Modal title="Настройки" onClose={onClose}>
         <div className="form-grid" style={{ padding: 0 }}>
           <label className="field">
             <span>Капитал для расчёта позиции</span>
             <input
-              ref={first}
+              data-autofocus
               type="number"
               min={1}
               value={draft.capital}
@@ -128,12 +119,12 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
             />
           </label>
         </div>
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted small-text">
           Риск 1–2% на сделку — общепринятая осторожная планка: размер позиции подбирается так, чтобы срабатывание
           стопа стоило не больше этой доли капитала.
         </p>
 
-        <h2 style={{ marginTop: 16 }}>AI-помощник</h2>
+        <h3 className="dialog-section">AI-помощник</h3>
         <div className="form-grid" style={{ padding: 0 }}>
           <label className="field">
             <span>Провайдер</span>
@@ -164,7 +155,7 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
           </label>
         </div>
         {modelsError && <div className="notice" style={{ margin: "8px 0 0" }}>{modelsError}</div>}
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted small-text">
           {aiProvider === "off" && "AI выключен: приложение работает без него."}
           {aiProvider === "cursor" && "Cursor CLI работает в режиме «только чтение». Ответ занимает 15–30 секунд, нужен вход: cursor-agent login. Данные уходят в облако Cursor."}
           {aiProvider === "claude" && "Нужен ключ ANTHROPIC_API_KEY в окружении (или вход через ant auth login). Данные уходят в Anthropic; оплата по тарифам API."}
@@ -180,7 +171,6 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
             Сохранить
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

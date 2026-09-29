@@ -1,4 +1,5 @@
 import type { Instrument, MarketId } from "../types";
+import { Icon } from "./Icon";
 
 // Подсказки для новичка: ликвидные тикеры, с которых удобно начать знакомство.
 const QUICK: Record<MarketId, Instrument[]> = {
@@ -32,52 +33,44 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
 
   return (
     <>
-      <div className="panel-head">Избранное</div>
+      <div className="panel-head">
+        Избранное <span className="muted num">{items.length || ""}</span>
+      </div>
       <div className="scroll">
         {items.length === 0 && (
           <div className="empty">
-            <b>Пока пусто.</b> Найдите тикер через поиск сверху или добавьте один из популярных ниже.
+            <b>Пока пусто.</b> Найдите тикер через поиск сверху (клавиша <kbd>/</kbd>) или добавьте один из популярных ниже.
           </div>
         )}
-        {items.map((i) => (
-          <div
-            key={i.symbol}
-            className={`watch-item${i.symbol === selected ? " active" : ""}`}
-            onClick={() => onSelect(i)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelect(i);
-              }
-            }}
-          >
-            <div className="info">
-              <span className="sym">{i.symbol}</span>
-              {i.name !== i.symbol && <span className="nm">{i.name}</span>}
-            </div>
-            <button
-              className="btn ghost small"
-              aria-label={`Убрать ${i.symbol} из избранного`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove(i);
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+        <ul className="watch-list">
+          {items.map((i) => (
+            <li key={i.symbol} className={`watch-item${i.symbol === selected ? " active" : ""}`}>
+              <button
+                className="watch-select"
+                aria-current={i.symbol === selected ? "true" : undefined}
+                onClick={() => onSelect(i)}
+              >
+                <span className="sym">{i.symbol}</span>
+                {i.name !== i.symbol && <span className="nm">{i.name}</span>}
+              </button>
+              <button
+                className="icon-btn watch-remove"
+                aria-label={`Убрать ${i.symbol} из избранного`}
+                title="Убрать из избранного"
+                onClick={() => onRemove(i)}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
         {quick.length > 0 && (
           <>
-            <div className="panel-head muted" style={{ fontWeight: 500 }}>
-              Популярные
-            </div>
+            <div className="panel-head subhead">Популярные</div>
             <div className="quick">
               {quick.map((q) => (
                 <button key={q.symbol} className="btn small" onClick={() => onQuickAdd(q)}>
-                  + {q.symbol}
+                  <Icon name="plus" size={12} /> {q.symbol}
                 </button>
               ))}
             </div>
