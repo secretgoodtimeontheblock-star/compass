@@ -85,6 +85,51 @@ export interface BacktestMetrics {
   profit_factor: number | null;
   exposure_pct: number;
   candles: number;
+  sharpe: number | null;
+  sortino: number | null;
+  calmar: number | null;
+  cagr_pct: number | null;
+  max_consecutive_losses: number;
+  payoff_ratio: number | null;
+  best_trade_pct: number | null;
+  worst_trade_pct: number | null;
+}
+
+export interface WalkForwardWindow {
+  start: number;
+  end: number;
+  return_pct: number | null;
+  buy_hold_pct: number | null;
+  max_drawdown_pct: number | null;
+  trades: number;
+}
+
+export interface WalkForward {
+  windows: WalkForwardWindow[];
+  profitable_windows: number;
+  n_windows: number;
+  return_std_pct: number | null;
+}
+
+export interface Resampling {
+  trades: number;
+  simulations: number;
+  profitable_share_pct: number | null;
+  return_p5_pct: number | null;
+  return_p50_pct: number | null;
+  return_p95_pct: number | null;
+  drawdown_actual_pct: number | null;
+  drawdown_shuffled_p95_pct: number | null;
+  drawdown_bootstrap_p95_pct: number | null;
+}
+
+export interface RunCard {
+  engine_version: string;
+  candles: number;
+  start_ts: number;
+  end_ts: number;
+  data_hash: string;
+  created_at: string;
 }
 
 export interface BacktestResponse {
@@ -92,6 +137,8 @@ export interface BacktestResponse {
   params: Record<string, number>;
   stale: boolean;
   metrics: BacktestMetrics;
+  validation: { walk_forward: WalkForward | null; resampling: Resampling | null };
+  run_card: RunCard;
   trades: Trade[];
   equity: { t: number; v: number }[];
 }

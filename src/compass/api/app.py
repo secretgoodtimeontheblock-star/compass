@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +29,7 @@ from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
 from compass.strategies import STRATEGIES, candles_to_df
+from compass.validation import risk_ratios, run_card, trade_resampling, trade_stats, walk_forward
 from compass.watchlist import Watchlist
 
 CRYPTO_QTY_STEP = 1e-6
@@ -222,11 +224,34 @@ def create_app(svc: Services) -> FastAPI:
             raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 свечей)")
         df = candles_to_df(res.candles)
         bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct)
+        ts = df["ts"].to_numpy()
+        eq = np.array([v for _, v in bt.equity])
+        metrics = {
+            **bt.metrics,
+            **risk_ratios(eq, ts, req.capital, bt.metrics["max_drawdown_pct"]),
+            **trade_stats(bt.trades),
+        }
         return {
             "strategy": strat.id,
             "params": params,
             "stale": res.stale,
-            "metrics": bt.metrics,
+            "metrics": metrics,
+            "validation": {
+                "walk_forward": walk_forward(df, bt, req.capital),
+                "resampling": trade_resampling(bt.trades),
+            },
+            "run_card": run_card(
+                df,
+                market=req.market,
+                symbol=req.symbol,
+                tf=req.tf,
+                strategy=strat.id,
+                params=params,
+                capital=req.capital,
+                fee_pct=req.fee_pct,
+                slippage_pct=req.slippage_pct,
+                stale=res.stale,
+            ),
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],
         }

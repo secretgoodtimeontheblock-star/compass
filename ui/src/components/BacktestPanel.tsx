@@ -213,12 +213,17 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             <Metric label="Средняя сделка" value={fmtPct(m.avg_trade_pct)} cls={pnlClass(m.avg_trade_pct)} />
             <Metric label="Профит-фактор" value={m.profit_factor == null ? "—" : fmtNum(m.profit_factor)} />
             <Metric label="Время в рынке" value={fmtPct(m.exposure_pct, 1, false)} />
+            <Metric label="Sharpe" value={m.sharpe == null ? "—" : fmtNum(m.sharpe)} />
+            <Metric label="Sortino" value={m.sortino == null ? "—" : fmtNum(m.sortino)} />
+            <Metric label="Calmar" value={m.calmar == null ? "—" : fmtNum(m.calmar)} />
+            <Metric label="Серия убытков подряд" value={String(m.max_consecutive_losses)} />
           </div>
           <p className="caveat" style={{ marginBottom: 0 }}>
             {beat >= 0 ? "Стратегия обошла" : "Стратегия уступила"} «купил и держи» на{" "}
             <b>{fmtPct(Math.abs(beat), 1, false)}</b> за {m.candles} свечей.
           </p>
           <EquityChart points={res!.equity} theme={theme} />
+          <Robustness res={res!} />
 
           <div className="panel-head" style={{ paddingBottom: 2 }}>
             Последние сделки
@@ -265,5 +270,66 @@ function Metric({ label, value, cls = "" }: { label: string; value: string; cls?
       <div className="lbl">{label}</div>
       <div className={`val ${cls}`}>{value}</div>
     </div>
+  );
+}
+
+function Robustness({ res }: { res: BacktestResponse }) {
+  const wf = res.validation.walk_forward;
+  const rs = res.validation.resampling;
+  const card = res.run_card;
+  return (
+    <>
+      <div className="panel-head" style={{ paddingBottom: 2 }}>
+        Устойчивость результата
+      </div>
+      {wf ? (
+        <>
+          <table className="num">
+            <thead>
+              <tr>
+                <th>Период</th>
+                <th className="r">Стратегия</th>
+                <th className="r">Купил и держи</th>
+                <th className="r">Просадка</th>
+                <th className="r">Сделок</th>
+              </tr>
+            </thead>
+            <tbody>
+              {wf.windows.map((w) => (
+                <tr key={w.start}>
+                  <td>
+                    {fmtDate(w.start)} – {fmtDate(w.end)}
+                  </td>
+                  <td className={`r ${pnlClass(w.return_pct)}`}>{fmtPct(w.return_pct)}</td>
+                  <td className={`r ${pnlClass(w.buy_hold_pct)}`}>{fmtPct(w.buy_hold_pct)}</td>
+                  <td className="r down">{fmtPct(w.max_drawdown_pct, 2, false)}</td>
+                  <td className="r">{w.trades}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="caveat" style={{ marginBottom: 0 }}>
+            Прибыльных периодов: <b>{wf.profitable_windows} из {wf.n_windows}</b>. Если прибыль только в одном
+            окне, результат держится на одной удачной полосе рынка.
+          </p>
+        </>
+      ) : (
+        <p className="caveat">Слишком мало свечей, чтобы разбить историю на периоды.</p>
+      )}
+      {rs ? (
+        <p className="caveat" style={{ marginBottom: 0 }}>
+          Ресэмплинг {rs.trades} сделок ({rs.simulations} прогонов): в прибыли{" "}
+          <b>{fmtPct(rs.profitable_share_pct, 0, false)}</b> прогонов; типичный итог{" "}
+          {fmtPct(rs.return_p50_pct)}, плохой сценарий (5%) {fmtPct(rs.return_p5_pct)}, при неудачном порядке
+          сделок просадка может дойти до {fmtPct(rs.drawdown_shuffled_p95_pct, 1, false)}.
+        </p>
+      ) : (
+        <p className="caveat">Сделок меньше пяти — ресэмплинг ничего не покажет.</p>
+      )}
+      <p className="caveat muted">
+        Sharpe/Sortino/Calmar — при безрисковой ставке 0; на истории короче двух месяцев не считаются. Расчёт:
+        версия движка {card.engine_version}, {card.candles} свечей, отпечаток данных {card.data_hash}.
+      </p>
+    </>
   );
 }
