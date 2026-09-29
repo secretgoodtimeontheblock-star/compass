@@ -17,6 +17,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   const [sid, setSid] = useState("");
   const [params, setParams] = useState<Record<string, number>>({});
   const [capital, setCapital] = useState(100_000);
+  const [depth, setDepth] = useState(1000);
   const [fee, setFee] = useState(0.05);
   const [slip, setSlip] = useState(0.05);
   const [res, setRes] = useState<BacktestResponse>();
@@ -77,7 +78,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           tf,
           strategy: strat.id,
           params,
-          limit: 1000,
+          limit: depth,
           capital,
           fee_pct: fee,
           slippage_pct: slip,
@@ -194,6 +195,14 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           </button>
         )}
         {savedNote && <p className="notice full">{savedNote}</p>}
+        <label className="field full">
+          <span>Глубина истории (свечей)</span>
+          <select value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
+            {[500, 1000, 2500, 5000].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </label>
         <button className="btn primary full" disabled={busy} onClick={run}>
           {busy ? "Считаем…" : `Проверить на ${instrument.symbol} (${tf})`}
         </button>
@@ -208,6 +217,14 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
         </div>
       )}
 
+      {res && (
+        <div className="notice">
+          История: {res.coverage.candles} свечей, {fmtDate(res.coverage.first_ts)}–{fmtDate(res.coverage.last_ts)}.{" "}
+          {res.coverage.exhausted
+            ? "Это всё, что есть у источника."
+            : "Запрошенная глубина набрана целиком: более ранняя история может существовать, выберите глубже."}
+        </div>
+      )}
       {res?.warnings.map((w) => (
         <div key={w} className="notice">{w}</div>
       ))}

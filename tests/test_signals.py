@@ -301,3 +301,14 @@ def test_risk_api_prices_bond_as_percent_of_face(env: Env) -> None:
     assert any("Облигация" in w for w in r["warnings"])
     env.adapter.instrument_info = lambda s: InstrumentInfo(s, "moex", "scripted", price_unit="percent_of_face")
     assert client.post("/api/risk", json={"market": "moex", "symbol": "X", "entry": 51.0, "stop": 49.0}).status_code == 422
+
+
+def test_backtest_reports_history_coverage(env: Env) -> None:
+    env.adapter.data["SBER"] = day_candles([100 + (i % 9) for i in range(60)])
+    env.now[0] = 10_000 * DAY
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    body = {"market": "moex", "symbol": "SBER", "strategy": "sma_cross", "limit": 100}
+    cov = client.post("/api/backtest", json=body).json()["coverage"]
+    assert cov == {"requested": 100, "candles": 60, "first_ts": 0, "last_ts": 59 * DAY, "exhausted": True}
+    cov = client.post("/api/backtest", json={**body, "limit": 60}).json()["coverage"]
+    assert cov["exhausted"] is False and cov["candles"] == 60

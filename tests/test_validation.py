@@ -94,3 +94,10 @@ def test_sample_rules_hide_small_sample_stats_but_keep_facts() -> None:
     assert warn and "3" in warn[0]
     enough = {**m, "trades": MIN_TRADES_FOR_STATS}
     assert apply_sample_rules(enough) == (enough, [])
+
+
+def test_run_card_labels_series_as_price_only() -> None:
+    df = _df([1.0 + i for i in range(40)])
+    card = run_card(df, market="moex", symbol="SBER", tf="1d", strategy="donchian", params={}, capital=1e5,
+                    fee_pct=0.05, slippage_pct=0.05, stale=False)
+    assert any("ценовой ряд" in a and "не полная" in a for a in card["assumptions"])

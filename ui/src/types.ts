@@ -155,6 +155,7 @@ export interface BacktestResponse {
   run_card: RunCard;
   data_quality: DataQuality;
   warnings: string[];
+  coverage: { requested: number; candles: number; first_ts: number; last_ts: number; exhausted: boolean };
   trades: Trade[];
   equity: { t: number; v: number }[];
 }

@@ -261,6 +261,14 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "metrics": metrics,
             "data_quality": quality,
             "warnings": warnings,
+            "coverage": {
+                "requested": req.limit,
+                "candles": len(candles),
+                "first_ts": int(df["ts"].iloc[0]),
+                "last_ts": int(df["ts"].iloc[-1]),
+                # получили меньше запрошенного — у источника больше нет; ровно столько — раньше история могла быть
+                "exhausted": len(res.candles) < req.limit,
+            },
             "validation": {
                 "walk_forward": walk_forward(df, bt, req.capital),
                 "resampling": trade_resampling(bt.trades),
