@@ -4,6 +4,7 @@ import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
 import type { Instrument, JournalDraft, JournalEntry, JournalMode, Position } from "../types";
 import { AiAnswer } from "./AiAnswer";
+import { PlansSection } from "./PlansSection";
 
 interface Props {
   instrument: Instrument | undefined;
@@ -31,6 +32,7 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
   const [reason, setReason] = useState("");
   const [plannedStop, setPlannedStop] = useState("");
   const [signalId, setSignalId] = useState<number | null>(null);
+  const [planRef, setPlanRef] = useState<{ uid: string; id?: number } | null>(null);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [deleted, setDeleted] = useState<JournalEntry[] | null>(null);
@@ -45,6 +47,7 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
     setPlannedStop(draft.plannedStop);
     setNote(draft.note);
     setSignalId(draft.signalId);
+    setPlanRef(draft.planUid ? { uid: draft.planUid, id: draft.planId } : null);
     setWhen(toLocalInput(Date.now()));
   }, [draft]);
 
@@ -66,12 +69,14 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
         planned_stop: plannedStop ? Number(plannedStop) : null,
         signal_id: signalId,
         mode,
+        plan_uid: planRef?.uid ?? null,
       });
       setQty("");
       setNote("");
       setReason("");
       setPlannedStop("");
       setSignalId(null);
+      setPlanRef(null);
       setWhen(toLocalInput(Date.now()));
       onChanged();
     } catch (e) {
@@ -317,10 +322,17 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
               <span>Заметка</span>
               <textarea value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />
             </label>
+            {planRef && (
+              <p className="notice full">
+                Сделка будет связана с планом{planRef.id ? ` №${planRef.id}` : ""}: потом её можно сверить с планом.
+              </p>
+            )}
             <button className="btn primary full" disabled={busy || !(Number(qty) > 0)} onClick={submit}>
               {busy ? "Сохраняем…" : "Записать"}
             </button>
           </div>
+          <PlansSection instrument={instrument} refreshKey={entries.length} />
+
           <div className="panel-head" style={{ paddingBottom: 2 }}>
             История по {instrument.symbol}
           </div>

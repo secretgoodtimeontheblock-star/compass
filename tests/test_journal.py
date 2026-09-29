@@ -190,8 +190,8 @@ def test_backup_roundtrip_is_idempotent_and_keeps_modes_and_deleted() -> None:
     _fill(src)
     snap = src.backup()
     assert snap["format"] == "compass-journal" and len(snap["entries"]) == 5
-    assert dst.restore_backup(snap) == {"added": 5, "skipped": 0}
-    assert dst.restore_backup(snap) == {"added": 0, "skipped": 5}  # повтор ничего не дублирует
+    assert dst.restore_backup(snap) == {"added": 5, "skipped": 0, "plans_added": 0, "plans_skipped": 0}
+    assert dst.restore_backup(snap) == {"added": 0, "skipped": 5, "plans_added": 0, "plans_skipped": 0}  # повтор ничего не дублирует
     assert sorted(map(_key, dst.list(mode=None))) == sorted(map(_key, src.list(mode=None)))
     assert [e.symbol for e in dst.deleted()] == ["YNDX"]
     assert [p.qty for p in dst.positions(None) if p.symbol == "SBER"] == [6]
@@ -228,7 +228,7 @@ def test_restore_is_all_or_nothing_and_rejects_garbage() -> None:
         with pytest.raises(ValueError):
             j.restore_backup(payload)
         assert j.list(mode=None) == [] and j.deleted() == []  # ни одной записи не просочилось
-    assert j.restore_backup(_wrap([_rec("a", "buy", 5, 1), _rec("b", "sell", 5, 2)])) == {"added": 2, "skipped": 0}
+    assert j.restore_backup(_wrap([_rec("a", "buy", 5, 1), _rec("b", "sell", 5, 2)])) == {"added": 2, "skipped": 0, "plans_added": 0, "plans_skipped": 0}
 
 
 def test_api_modes_backup_restore_and_undelete(env: Env) -> None:
@@ -250,5 +250,5 @@ def test_api_modes_backup_restore_and_undelete(env: Env) -> None:
     assert [x["id"] for x in client.get("/api/journal/deleted").json()] == [real["id"]]
     assert client.post(f"/api/journal/{real['id']}/restore").status_code == 200
     assert client.post(f"/api/journal/{real['id']}/restore").status_code == 404
-    assert client.post("/api/journal/restore", json=dump.json()).json() == {"added": 0, "skipped": 2}
+    assert client.post("/api/journal/restore", json=dump.json()).json() == {"added": 0, "skipped": 2, "plans_added": 0, "plans_skipped": 0}
     assert client.post("/api/journal/restore", json={"format": "x"}).status_code == 422

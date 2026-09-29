@@ -13,6 +13,7 @@ from compass.db import connect
 from compass.journal import Journal
 from compass.markets import MarketError
 from compass.models import Candle, Instrument, InstrumentInfo
+from compass.plans import PlanStore
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
 from compass.watchlist import Watchlist
@@ -115,7 +116,8 @@ def env() -> Env:
     cloud, local = FakeProvider("cursor", cloud=True), FakeProvider("ollama", cloud=False)
     ai = AiService({"cursor": cloud, "ollama": local}, settings, conn, slot_wait_s=0.05)
     svc = Services(
-        adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0]
+        adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0],
+        plans=PlanStore(conn),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

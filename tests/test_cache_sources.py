@@ -128,3 +128,36 @@ def test_v7_upgrade_marks_old_journal_rows_real_with_unique_uid_and_backup(tmp_p
         assert backup.execute("SELECT COUNT(*) FROM journal").fetchone()[0] == 3
     finally:
         backup.close()
+
+
+def test_v8_upgrade_adds_plans_and_links_keeping_data_and_backup(tmp_path):
+    path = tmp_path / "compass.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(db._V1 + db._V2 + db._V3 + db._V4 + db._V5 + db._V6 + db._V7 + db._V8 + "PRAGMA user_version=8;")
+    old.execute(
+        "INSERT INTO signals (market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params) "
+        "VALUES ('moex','SBER','1d','donchian','buy',1000,270.5,250.0,5,'{\"entry\": 20, \"exit\": 10}')"
+    )
+    old.execute(
+        "INSERT INTO journal (market, symbol, side, qty, price, fee, ts, created_at, uid) "
+        "VALUES ('moex','SBER','buy',10,270.5,1.5,1000,5,'abc')"
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        assert conn.execute("SELECT params, strategy_version FROM signals").fetchone() == ('{"entry": 20, "exit": 10}', None)
+        assert conn.execute("SELECT qty, uid, plan_uid FROM journal").fetchone() == (10, "abc", None)
+        assert conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0] == 0
+        triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {"plans_no_update", "plans_no_delete"} <= triggers
+    finally:
+        conn.close()
+    backup = sqlite3.connect(str(path) + ".v8.bak")
+    try:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert backup.execute("SELECT COUNT(*) FROM journal").fetchone()[0] == 1
+    finally:
+        backup.close()

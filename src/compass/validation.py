@@ -178,6 +178,7 @@ def run_card(
     fee_pct: float,
     slippage_pct: float,
     stale: bool,
+    strategy_version: str | None = None,
 ) -> dict[str, Any]:
     """Всё, что нужно, чтобы повторить расчёт и понять, совпадает ли он с прежним."""
     return {
@@ -186,6 +187,7 @@ def run_card(
         "symbol": symbol,
         "tf": tf,
         "strategy": strategy,
+        "strategy_version": strategy_version,
         "params": params,
         "capital": capital,
         "fee_pct": fee_pct,

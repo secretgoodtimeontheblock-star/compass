@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -34,6 +36,7 @@ class Strategy:
     params: tuple[Param, ...]
     target: Callable[[pd.DataFrame, dict[str, int]], pd.Series]
     check: Callable[[dict[str, int]], str | None] = lambda p: None  # ошибка сочетания параметров
+    version: int = 1  # номер редакции правила: увеличивать при любом изменении логики target()
 
     def resolve(self, overrides: dict[str, int] | None = None) -> dict[str, int]:
         """Дефолты + значения пользователя с проверкой границ. ValueError — по-русски."""
@@ -145,6 +148,13 @@ STRATEGIES: dict[str, Strategy] = {
         ),
     )
 }
+
+
+def strategy_version(strat: Strategy, params: dict[str, int]) -> str:
+    """Идентификатор конкретной конфигурации: правило + его редакция + параметры.
+    Совпадает у бэктеста, сигнала и плана, поэтому видно, что проверено именно то, что торгуется."""
+    canon = json.dumps(params, sort_keys=True, separators=(",", ":"))
+    return f"{strat.id}/r{strat.version}/{hashlib.sha256(canon.encode()).hexdigest()[:8]}"
 
 
 def candles_to_df(candles) -> pd.DataFrame:

@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _V1 = """
 CREATE TABLE candles (
@@ -120,6 +120,31 @@ UPDATE journal SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
 CREATE UNIQUE INDEX journal_uid ON journal (uid);
 """
 
+# Неизменяемые планы сделок, версия стратегии в сигнале и связь записи журнала с планом.
+# Триггеры не дают изменить или удалить план: разбор план/факт честен, только пока план такой, каким был написан.
+_V9 = """
+ALTER TABLE signals ADD COLUMN strategy_version TEXT;
+ALTER TABLE journal ADD COLUMN plan_uid TEXT;
+CREATE TABLE plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  market TEXT NOT NULL, symbol TEXT NOT NULL, source TEXT NOT NULL,
+  strategy TEXT, strategy_version TEXT, params TEXT, signal_id INTEGER,
+  entry REAL NOT NULL CHECK (entry > 0), stop REAL NOT NULL CHECK (stop > 0 AND stop < entry),
+  target REAL CHECK (target IS NULL OR target > entry),
+  qty REAL NOT NULL CHECK (qty > 0), lots REAL NOT NULL,
+  capital REAL NOT NULL, risk_pct REAL NOT NULL, available REAL,
+  fee_pct REAL NOT NULL, slippage_pct REAL NOT NULL,
+  cost REAL NOT NULL, risk_amount REAL NOT NULL, risk_amount_worse REAL NOT NULL, budget REAL NOT NULL,
+  currency TEXT, unit_value REAL NOT NULL DEFAULT 1, reward_risk REAL,
+  reason TEXT NOT NULL, warnings TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX plans_symbol ON plans (market, symbol, id);
+CREATE TRIGGER plans_no_update BEFORE UPDATE ON plans BEGIN SELECT RAISE(ABORT, 'План сделки неизменяем'); END;
+CREATE TRIGGER plans_no_delete BEFORE DELETE ON plans BEGIN SELECT RAISE(ABORT, 'План сделки нельзя удалить'); END;
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -193,4 +218,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 8:
         conn.executescript(_V8)
         conn.execute("PRAGMA user_version = 8")
+        conn.commit()
+    if version < 9:
+        conn.executescript(_V9)
+        conn.execute("PRAGMA user_version = 9")
         conn.commit()

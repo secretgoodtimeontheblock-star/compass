@@ -27,11 +27,12 @@ from compass.journal import MODES, Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument, InstrumentInfo, closed_candles
+from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
-from compass.strategies import STRATEGIES, candles_to_df
+from compass.strategies import STRATEGIES, candles_to_df, strategy_version
 from compass.validation import (
     apply_sample_rules,
     risk_ratios,
@@ -67,6 +68,7 @@ class Services:
     ai: AiService
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
     live: OkxLive | None = None
+    plans: PlanStore | None = None
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -83,6 +85,24 @@ class JournalRequest(BaseModel):
     planned_stop: float | None = None
     reason: str = ""
     mode: str = "real"  # real | paper | historical
+    plan_uid: str | None = None  # план, по которому совершена сделка
+
+
+class PlanRequest(BaseModel):
+    market: str
+    symbol: str
+    entry: float
+    stop: float
+    target: float | None = None
+    reason: str
+    signal_id: int | None = None
+    strategy: str | None = None  # для ручного плана; при signal_id берётся из сигнала
+    params: dict[str, int] | None = None
+    capital: float | None = None
+    risk_pct: float | None = None
+    available: float | None = None
+    fee_pct: float | None = None
+    slippage_pct: float | None = None
 
 
 class WatchItem(BaseModel):
@@ -285,6 +305,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 fee_pct=req.fee_pct,
                 slippage_pct=req.slippage_pct,
                 stale=res.stale,
+                strategy_version=strategy_version(strat, params),
             ),
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],
@@ -329,8 +350,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     def instrument(market: str, symbol: str) -> dict:
         return asdict(instrument_info(market, symbol))
 
-    @app.post("/api/risk")
-    def risk(req: RiskRequest) -> dict:
+    def risk_calc(req: RiskRequest) -> dict:
         info = instrument_info(req.market, req.symbol)
         cfg = svc.settings.all()
         fee = req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1)
@@ -375,6 +395,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             **asdict(p),
             "lot_size": info.lot,
             "currency": info.currency,
+            "unit_value": info.face_value / 100 if bond and info.face_value else 1.0,
             "fee_pct": fee,
             "slippage_pct": slip,
             "warnings": warnings,
@@ -387,6 +408,85 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "Приложение ничего не исполняет и не блокирует: лимит — предупреждение.",
             ],
         }
+
+    @app.post("/api/risk")
+    def risk(req: RiskRequest) -> dict:
+        return risk_calc(req)
+
+    # --- планы сделок ---
+
+    def plan_store() -> PlanStore:
+        if svc.plans is None:
+            raise HTTPException(503, "Хранилище планов недоступно")
+        return svc.plans
+
+    @app.post("/api/plans", status_code=201)
+    def plan_create(req: PlanRequest) -> dict:
+        store = plan_store()
+        strategy_id, params, version, notes = req.strategy, req.params, None, []
+        if req.signal_id is not None:
+            sig = svc.signals.get(req.signal_id)
+            if sig is None:
+                raise HTTPException(404, "Сигнал не найден")
+            if (sig.market, sig.symbol) != (req.market, req.symbol):
+                raise ValueError("Сигнал относится к другому инструменту")
+            strategy_id, params, version = sig.strategy, sig.params, sig.strategy_version
+            if params is None:
+                notes.append("Параметры сигнала не сохранены (сигнал создан старой версией): версия стратегии неизвестна.")
+        if strategy_id is not None:
+            strat = STRATEGIES.get(strategy_id)
+            if strat is None:
+                raise HTTPException(404, f"Неизвестная стратегия: {strategy_id}")
+            if params is not None:
+                params = strat.resolve(params)
+                if req.signal_id is None:  # у сигнала версия зафиксирована в момент его рождения: пересчитывать её нельзя
+                    version = strategy_version(strat, params)
+        elif params is not None:
+            raise ValueError("Параметры без стратегии не имеют смысла")
+        r = risk_calc(
+            RiskRequest(
+                market=req.market, symbol=req.symbol, entry=req.entry, stop=req.stop, capital=req.capital,
+                risk_pct=req.risk_pct, available=req.available, fee_pct=req.fee_pct, slippage_pct=req.slippage_pct,
+            )
+        )
+        if r["qty"] <= 0:
+            raise ValueError(r["warnings"][0] if r["warnings"] else "Покупать нечего: количество нулевое")
+        cfg = svc.settings.all()
+        reward_risk = None
+        if req.target is not None and req.entry > req.stop:
+            reward_risk = round((req.target - req.entry) / (req.entry - req.stop), 2)
+        plan = store.add(
+            Plan(
+                market=req.market, symbol=req.symbol, source=getattr(adapter(req.market), "source_id", req.market),
+                entry=req.entry, stop=req.stop, target=req.target, qty=r["qty"], lots=r["lots"],
+                capital=req.capital if req.capital is not None else cfg["capital"],
+                risk_pct=req.risk_pct if req.risk_pct is not None else cfg["risk_pct"],
+                fee_pct=r["fee_pct"], slippage_pct=r["slippage_pct"], cost=r["cost"], risk_amount=r["risk_amount"],
+                risk_amount_worse=r["risk_amount_worse"], budget=r["budget"], strategy=strategy_id,
+                strategy_version=version, params=params, signal_id=req.signal_id, available=req.available,
+                currency=r["currency"], unit_value=r["unit_value"], reward_risk=reward_risk,
+                reason=req.reason.strip(), warnings=(*r["warnings"], *notes),
+            )
+        )
+        return {**plan_dto(plan), "assumptions": r["assumptions"]}
+
+    @app.get("/api/plans")
+    def plan_list(market: str | None = None, symbol: str | None = None, limit: int = Query(100, ge=1, le=500)) -> list[dict]:
+        return [plan_dto(p) for p in plan_store().list(market, symbol, limit)]
+
+    @app.get("/api/plans/{plan_id}")
+    def plan_get(plan_id: int) -> dict:
+        p = plan_store().get(plan_id)
+        if p is None:
+            raise HTTPException(404, "План не найден")
+        return plan_dto(p)
+
+    @app.get("/api/plans/{plan_id}/review")
+    def plan_review(plan_id: int) -> dict:
+        p = plan_store().get(plan_id)
+        if p is None:
+            raise HTTPException(404, "План не найден")
+        return review(p, svc.journal.list(p.market, p.symbol, mode=None))
 
     @app.get("/api/settings")
     def settings_get() -> dict:
@@ -409,13 +509,13 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     @app.get("/api/journal/backup.json")
     def journal_backup() -> Response:
         return JSONResponse(
-            svc.journal.backup(),
+            svc.journal.backup(svc.plans),
             headers={"Content-Disposition": 'attachment; filename="compass-journal-backup.json"'},
         )
 
     @app.post("/api/journal/restore")
     def journal_restore(payload: dict) -> dict:
-        return svc.journal.restore_backup(payload)
+        return svc.journal.restore_backup(payload, svc.plans)
 
     @app.get("/api/journal/deleted")
     def journal_deleted() -> list[dict]:

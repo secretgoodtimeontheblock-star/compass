@@ -24,10 +24,11 @@ from dataclasses import dataclass, replace
 from compass.db import Connection
 
 BACKUP_FORMAT = "compass-journal"
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2  # 2 — вместе с планами сделок; копии версии 1 (без планов) читаются
 MODES = ("real", "paper", "historical")
 _COLUMNS = (
-    "market, symbol, side, qty, price, ts, fee, note, signal_id, planned_stop, reason, id, mode, uid, deleted_at"
+    "market, symbol, side, qty, price, ts, fee, note, signal_id, planned_stop, reason, id, mode, uid, deleted_at, "
+    "plan_uid"
 )
 _EPS = 1e-9
 
@@ -49,6 +50,7 @@ class Entry:
     mode: str = "real"  # real | paper | historical
     uid: str | None = None  # стабильный идентификатор: по нему копия восстанавливается без дублей
     deleted_at: int | None = None  # секунды UTC; None — запись действует
+    plan_uid: str | None = None  # план сделки, по которому совершена запись (plans.uid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,7 @@ class Journal:
         validate(e)
         e = replace(e, uid=e.uid or uuid.uuid4().hex, deleted_at=None)
         with self._lock, self._conn:
+            self._check_plan_link(e)
             # проверяем всю историю тикера вместе с новой записью, ДО вставки
             summarize([*self._active(e.mode, e.market, e.symbol), e])
             cur = self._insert(e)
@@ -185,21 +188,25 @@ class Journal:
 
     # --- резервная копия ---
 
-    def backup(self) -> dict:
-        """Полная копия журнала: все режимы и удалённые записи."""
+    def backup(self, plans=None) -> dict:
+        """Полная копия журнала: все режимы, удалённые записи и (если передан PlanStore) планы сделок."""
         with self._lock:
             rows = self._conn.execute(f"SELECT {_COLUMNS} FROM journal ORDER BY ts, id").fetchall()
+            plan_items = plans.export() if plans is not None else []
         entries = []
         for r in rows:
             e = Entry(*r)
             entries.append({k: getattr(e, k) for k in Entry.__dataclass_fields__ if k != "id"})
-        return {"format": BACKUP_FORMAT, "version": BACKUP_VERSION, "exported_at": int(time.time()), "entries": entries}
+        return {
+            "format": BACKUP_FORMAT, "version": BACKUP_VERSION, "exported_at": int(time.time()),
+            "entries": entries, "plans": plan_items,
+        }
 
-    def restore_backup(self, payload: dict) -> dict:
+    def restore_backup(self, payload: dict, plans=None) -> dict:
         """Добавляет записи, которых ещё нет (по uid); существующие не трогает — повторное
         восстановление ничего не дублирует. Всё или ничего: если итоговые позиции не сходятся,
         не сохраняется ни одна запись."""
-        if payload.get("format") != BACKUP_FORMAT or payload.get("version") != BACKUP_VERSION:
+        if payload.get("format") != BACKUP_FORMAT or payload.get("version") not in (1, BACKUP_VERSION):
             raise ValueError("Это не резервная копия журнала Compass или её версия не поддерживается")
         raw = payload.get("entries")
         if not isinstance(raw, list):
@@ -212,9 +219,18 @@ class Journal:
             e = Entry(**item)
             validate(e)
             incoming.append(e)
+        raw_plans = payload.get("plans") or []
+        if not isinstance(raw_plans, list):
+            raise ValueError("В резервной копии повреждён список планов")  # noqa: TRY004
+        if raw_plans and plans is None:
+            raise ValueError("Копия содержит планы, а хранилище планов недоступно")
+        parsed_plans = plans.check_import(raw_plans) if raw_plans else []
         with self._lock, self._conn:
+            new_plans = plans.import_new(parsed_plans) if parsed_plans else (0, 0)
             known = {r[0] for r in self._conn.execute("SELECT uid FROM journal").fetchall()}
             fresh = [e for e in incoming if e.uid not in known]
+            for e in fresh:
+                self._check_plan_link(e)
             if len({e.uid for e in fresh}) != len(fresh):
                 raise ValueError("В резервной копии повторяются идентификаторы записей")
             for mode, market, symbol in {(e.mode, e.market, e.symbol) for e in fresh}:
@@ -225,7 +241,10 @@ class Journal:
                 summarize([*self._active(mode, market, symbol), *mine])
             for e in fresh:
                 self._insert(e)
-        return {"added": len(fresh), "skipped": len(incoming) - len(fresh)}
+        return {
+            "added": len(fresh), "skipped": len(incoming) - len(fresh),
+            "plans_added": new_plans[0], "plans_skipped": new_plans[1],
+        }
 
     def to_csv(self) -> str:
         """Хронологический экспорт действующих записей всех режимов. BOM — чтобы Excel открыл кириллицу."""
@@ -235,7 +254,7 @@ class Journal:
         writer.writerow(
             [
                 "market", "symbol", "side", "qty", "price", "fee", "ts_ms", "reason", "planned_stop",
-                "note", "signal_id", "mode", "uid",
+                "note", "signal_id", "mode", "uid", "plan_uid",
             ]
         )
         for e in sorted(self.list(mode=None), key=lambda x: (x.ts, x.id or 0)):
@@ -243,7 +262,7 @@ class Journal:
                 [
                     e.market, e.symbol, e.side, e.qty, e.price, e.fee, e.ts, e.reason,
                     "" if e.planned_stop is None else e.planned_stop, e.note,
-                    "" if e.signal_id is None else e.signal_id, e.mode, e.uid or "",
+                    "" if e.signal_id is None else e.signal_id, e.mode, e.uid or "", e.plan_uid or "",
                 ]
             )
         return buf.getvalue()
@@ -253,12 +272,22 @@ class Journal:
     def _insert(self, e: Entry):
         return self._conn.execute(
             "INSERT INTO journal (market, symbol, side, qty, price, ts, fee, note, signal_id, "
-            "planned_stop, reason, mode, uid, deleted_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "planned_stop, reason, mode, uid, deleted_at, plan_uid, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 e.market, e.symbol, e.side, e.qty, e.price, e.ts, e.fee, e.note, e.signal_id, e.planned_stop,
-                e.reason, e.mode, e.uid, e.deleted_at, int(time.time()),
+                e.reason, e.mode, e.uid, e.deleted_at, e.plan_uid, int(time.time()),
             ),
         )
+
+    def _check_plan_link(self, e: Entry) -> None:
+        """Запись может ссылаться только на существующий план того же тикера."""
+        if e.plan_uid is None:
+            return
+        row = self._conn.execute("SELECT market, symbol FROM plans WHERE uid = ?", (e.plan_uid,)).fetchone()
+        if row is None:
+            raise ValueError("План, на который ссылается запись, не найден")
+        if tuple(row) != (e.market, e.symbol):
+            raise ValueError("Запись относится к другому инструменту, чем связанный с ней план")
 
     def _active(self, mode: str, market: str, symbol: str) -> list[Entry]:
         rows = self._conn.execute(

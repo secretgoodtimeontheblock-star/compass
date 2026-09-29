@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, STRATEGY_SHORT } from "../lib/format";
-import type { Instrument, JournalDraft, RiskResponse, Signal } from "../types";
+import type { Instrument, JournalDraft, PlanDto, RiskResponse, Signal } from "../types";
 import { AiAnswer } from "./AiAnswer";
 
 interface Props {
@@ -59,6 +59,9 @@ function SignalCard({
   const [risk, setRisk] = useState<RiskResponse>();
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState<PlanDto>();
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("Вход по сигналу");
   const buy = s.side === "buy";
 
   const calc = async () => {
@@ -69,6 +72,29 @@ function SignalCard({
       setErr(undefined);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ошибка расчёта");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePlan = async () => {
+    if (s.stop == null) return;
+    setBusy(true);
+    try {
+      setPlan(
+        await api.createPlan({
+          market: s.market,
+          symbol: s.symbol,
+          entry: s.price,
+          stop: s.stop,
+          target: target ? Number(target) : null,
+          reason,
+          signal_id: s.id,
+        }),
+      );
+      setErr(undefined);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Не удалось сохранить план");
     } finally {
       setBusy(false);
     }
@@ -126,9 +152,31 @@ function SignalCard({
       {risk && (
         <p className="caveat" style={{ marginTop: 6 }}>{risk.assumptions.join(" ")}</p>
       )}
+      {buy && risk && risk.qty > 0 && !plan && (
+        <div className="form-grid" style={{ padding: "8px 0 0" }}>
+          <label className="field">
+            <span>Цель (необязательно)</span>
+            <input type="number" min={0} step="any" value={target} onChange={(e) => setTarget(e.target.value)} />
+          </label>
+          <label className="field full">
+            <span>Причина входа</span>
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button className="btn small primary full" disabled={busy || !reason.trim()} onClick={savePlan}>
+            Сохранить план
+          </button>
+          <p className="caveat full">План нельзя изменить после сохранения: потом по нему сверяется, как вы вошли на деле.</p>
+        </div>
+      )}
+      {plan && (
+        <div className="notice" style={{ marginTop: 6 }}>
+          План №{plan.id} сохранён · {plan.strategy_version ?? "без стратегии"}
+          {plan.reward_risk != null ? ` · выгода/риск ${plan.reward_risk}` : ""}
+        </div>
+      )}
       {buy && risk && risk.qty > 0 && (
         <button
-          className="btn small primary"
+          className={plan ? "btn small primary" : "btn small ghost"}
           style={{ marginTop: 8 }}
           onClick={() =>
             onRecord({
@@ -141,10 +189,12 @@ function SignalCard({
               reason: "Вход по сигналу",
               note: "",
               signalId: s.id,
+              planUid: plan?.uid,
+              planId: plan?.id,
             })
           }
         >
-          Записать эту сделку
+          {plan ? "Записать сделку по плану" : "Записать без плана"}
         </button>
       )}
       {!ai.result && (

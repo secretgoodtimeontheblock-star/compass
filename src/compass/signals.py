@@ -22,7 +22,7 @@ from compass.indicators import atr
 from compass.markets.base import MarketError
 from compass.models import closed_candles
 from compass.settings import Settings, profile_key
-from compass.strategies import STRATEGIES, candles_to_df
+from compass.strategies import STRATEGIES, candles_to_df, strategy_version
 from compass.watchlist import Watchlist
 
 log = logging.getLogger("compass.signals")
@@ -45,6 +45,7 @@ class Signal:
     created_at: int | None = None
     seen: bool = False
     params: dict[str, int] | None = None  # параметры стратегии; None — сигнал создан до их сохранения
+    strategy_version: str | None = None  # см. strategies.strategy_version; None — сигнал старого образца
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +55,8 @@ class ScanResult:
 
 
 def _row_to_signal(r: tuple) -> Signal:
-    return Signal(*r[:10], seen=bool(r[10]), params=json.loads(r[11]) if r[11] else None)
+    return Signal(*r[:10], seen=bool(r[10]), params=json.loads(r[11]) if r[11] else None,
+                  strategy_version=r[12])
 
 
 class SignalStore:
@@ -67,10 +69,10 @@ class SignalStore:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT OR IGNORE INTO signals "
-                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params, strategy_version) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (s.market, s.symbol, s.tf, s.strategy, s.side, s.candle_ts, s.price, s.stop, int(time.time()),
-                 None if s.params is None else json.dumps(s.params, sort_keys=True)),
+                 None if s.params is None else json.dumps(s.params, sort_keys=True), s.strategy_version),
             )
         return cur.rowcount == 1
 
@@ -91,7 +93,7 @@ class SignalStore:
             where.append("symbol = ?")
             args.append(symbol)
         sql = (
-            "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params "
+            "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, strategy_version "
             "FROM signals " + (f"WHERE {' AND '.join(where)} " if where else "") + "ORDER BY id DESC LIMIT ?"
         )
         with self._lock:
@@ -101,7 +103,7 @@ class SignalStore:
     def get(self, signal_id: int) -> Signal | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params "
+                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, strategy_version "
                 "FROM signals WHERE id = ?",
                 (signal_id,),
             ).fetchone()
@@ -171,7 +173,8 @@ class SignalEngine:
                     stop = round(price - ATR_STOP_MULT * float(last_atr), 8)
                     if stop <= 0:
                         stop = None
-                sig = Signal(inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop, params=params)
+                sig = Signal(inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop, params=params,
+                             strategy_version=strategy_version(strat, params))
                 if self._store.insert(sig):
                     new.append(sig)
                     self._notifier.send(sig)

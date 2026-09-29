@@ -10,6 +10,8 @@ import type {
   JournalMode,
   Market,
   MarketId,
+  PlanDto,
+  PlanReview,
   Position,
   RiskResponse,
   ScanResponse,
@@ -119,13 +121,25 @@ export const api = {
   restoreJournalBackup: (payload: unknown) =>
     request<{ added: number; skipped: number }>("/api/journal/restore", json("POST", payload)),
   addJournal: (
-    e: Omit<JournalEntry, "id" | "signal_id" | "planned_stop" | "reason" | "mode" | "uid" | "deleted_at"> & {
+    e: Omit<JournalEntry, "id" | "signal_id" | "planned_stop" | "reason" | "mode" | "uid" | "deleted_at" | "plan_uid"> & {
       mode?: JournalMode;
+      plan_uid?: string | null;
       signal_id?: number | null;
       planned_stop?: number | null;
       reason?: string;
     },
   ) =>
     request<JournalEntry>("/api/journal", json("POST", e)),
+  createPlan: (b: {
+    market: MarketId;
+    symbol: string;
+    entry: number;
+    stop: number;
+    target?: number | null;
+    reason: string;
+    signal_id?: number | null;
+  }) => request<PlanDto>("/api/plans", json("POST", b)),
+  plans: (p: { market?: MarketId; symbol?: string } = {}) => request<PlanDto[]>(`/api/plans?${qs(p)}`),
+  planReview: (id: number) => request<PlanReview>(`/api/plans/${id}/review`),
   removeJournal: (id: number) => request<void>(`/api/journal/${id}`, { method: "DELETE" }),
 };

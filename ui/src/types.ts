@@ -201,6 +201,8 @@ export interface JournalDraft {
   reason: string;
   note: string;
   signalId: number;
+  planUid?: string;
+  planId?: number;
 }
 
 export interface AiStatus {
@@ -248,6 +250,7 @@ export interface JournalEntry {
   mode: JournalMode;
   uid: string;
   deleted_at: number | null;
+  plan_uid: string | null;
 }
 
 export type JournalMode = "real" | "paper" | "historical";
@@ -266,4 +269,58 @@ export interface Position {
 export interface ScanResponse {
   new: Signal[];
   errors: string[];
+}
+
+export interface PlanDto {
+  id: number;
+  uid: string;
+  created_at: number;
+  market: MarketId;
+  symbol: string;
+  source: string;
+  strategy: string | null;
+  strategy_version: string | null;
+  params: Record<string, number> | null;
+  signal_id: number | null;
+  entry: number;
+  stop: number;
+  target: number | null;
+  qty: number;
+  lots: number;
+  cost: number;
+  risk_amount: number;
+  risk_amount_worse: number;
+  budget: number;
+  currency: string | null;
+  reward_risk: number | null;
+  reason: string;
+  warnings: string[];
+  assumptions?: string[];
+}
+
+export interface PlanDeviation {
+  code: "entry" | "qty" | "stop";
+  label: string;
+  planned: number;
+  actual: number | null;
+  diff_pct: number | null;
+  worse: boolean;
+}
+
+export interface PlanReview {
+  plan_id: number;
+  status: "open" | "entered" | "closed";
+  bought_qty: number;
+  sold_qty: number;
+  fees: number;
+  entries: number;
+  deviations: PlanDeviation[];
+  avg_entry?: number;
+  avg_exit?: number;
+  actual_risk_at_stop?: number;
+  risk_budget?: number;
+  risk_exceeded?: boolean;
+  result_pct?: number;
+  r_multiple?: number | null;
+  notes?: string[];
 }
