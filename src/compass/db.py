@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _V1 = """
 CREATE TABLE candles (
@@ -104,6 +104,12 @@ ALTER TABLE journal ADD COLUMN planned_stop REAL;
 ALTER TABLE journal ADD COLUMN reason TEXT NOT NULL DEFAULT '';
 """
 
+# Параметры стратегии, породившие сигнал (JSON). У старых сигналов NULL: их параметры не сохранялись,
+# и приложение не выдумывает их задним числом.
+_V7 = """
+ALTER TABLE signals ADD COLUMN params TEXT;
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -169,4 +175,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 6:
         conn.executescript(_V6)
         conn.execute("PRAGMA user_version = 6")
+        conn.commit()
+    if version < 7:
+        conn.executescript(_V7)
+        conn.execute("PRAGMA user_version = 7")
         conn.commit()

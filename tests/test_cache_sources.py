@@ -63,3 +63,34 @@ def test_v4_upgrade_preserves_data_and_creates_original_backup(tmp_path):
     assert backup.execute("PRAGMA user_version").fetchone()[0] == 4
     assert backup.execute("SELECT COUNT(*) FROM candles").fetchone()[0] == 2
     backup.close()
+
+
+def test_v6_upgrade_adds_signal_params_keeping_old_rows_and_backup(tmp_path):
+    path = tmp_path / "compass.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(db._V1 + db._V2 + db._V3 + db._V4 + db._V5 + db._V6 + "PRAGMA user_version=6;")
+    old.execute(
+        "INSERT INTO signals (market, symbol, tf, strategy, side, candle_ts, price, stop, created_at) "
+        "VALUES ('moex','SBER','1d','donchian','buy',1000,270.5,250.0,5)"
+    )
+    old.execute(
+        "INSERT INTO journal (market, symbol, side, qty, price, fee, ts, created_at, planned_stop, reason) "
+        "VALUES ('moex','SBER','buy',10,270.5,1.5,1000,5,250.0,'пробой')"
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        row = conn.execute("SELECT symbol, price, stop, params FROM signals").fetchone()
+        assert row == ("SBER", 270.5, 250.0, None)
+        assert conn.execute("SELECT qty, reason FROM journal").fetchone() == (10, "пробой")
+    finally:
+        conn.close()
+    backup = sqlite3.connect(str(path) + ".v6.bak")
+    try:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert backup.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 1
+    finally:
+        backup.close()

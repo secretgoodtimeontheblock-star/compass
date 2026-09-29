@@ -168,3 +168,36 @@ def test_position_size_rejects_bad_input(kw: dict) -> None:
     args = {"capital": 100_000, "risk_pct": 1, "entry": 200, "stop": 190} | kw
     with pytest.raises(ValueError):
         position_size(**args)
+
+
+def test_position_size_includes_fees_and_slippage() -> None:
+    # вручную: вход 100·1.001 = 100.1 (+0.1% комиссии = 100.2001), выход по стопу 90·0.999 = 89.91 (−0.1% = 89.82009)
+    p = position_size(10_000, 1, entry=100, stop=90, fee_pct=0.1, slippage_pct=0.1)
+    per_unit = 100.2001 - 89.82009
+    assert p.qty == 9  # 100 / 10.38 = 9.6 → 9
+    assert p.risk_amount == pytest.approx(9 * per_unit, abs=0.01)
+    assert p.cost == pytest.approx(9 * 100.2001, abs=0.01)
+    assert p.risk_amount_worse > p.risk_amount
+    assert p.budget == 100 and p.warning is None
+    free = position_size(10_000, 1, entry=100, stop=90)
+    assert free.qty == 10 and free.risk_amount_worse == free.risk_amount
+
+
+def test_position_size_zero_qty_explains_why() -> None:
+    lot = position_size(100_000, 0.01, entry=274, stop=260, lot=10)  # лот рискует 140 при бюджете 10
+    assert lot.qty == 0 and lot.warning and "лот рискует" in lot.warning
+    poor = position_size(100_000, 50, entry=274, stop=270, lot=10, available=1_000)  # лот стоит 2740
+    assert poor.qty == 0 and poor.warning and "не хватает" in poor.warning
+
+
+def test_position_size_limited_by_free_funds_not_capital() -> None:
+    p = position_size(100_000, 1, entry=100, stop=99, available=2_000)  # по риску 1000 шт., денег на 20
+    assert p.qty == 20 and p.capped and p.warning and "свободными средствами" in p.warning
+    assert p.risk_amount == pytest.approx(20)  # риск меньше заданного — и это сказано
+
+
+@pytest.mark.parametrize("kw", [{"fee_pct": -1}, {"slippage_pct": 100}, {"available": -5}, {"entry": float("nan")}])
+def test_position_size_rejects_bad_costs(kw: dict) -> None:
+    args = {"capital": 1000, "risk_pct": 1, "entry": 100, "stop": 90, **kw}
+    with pytest.raises(ValueError):
+        position_size(**args)

@@ -378,7 +378,8 @@ def test_ai_settings_defaults_are_not_shared(env: Env) -> None:
 
 
 def sample_signal(side: str = "buy") -> Signal:
-    return Signal("moex", "SBER", "1d", "donchian", side, 25 * DAY, 272.45, 260.1 if side == "buy" else None, id=1)
+    return Signal("moex", "SBER", "1d", "donchian", side, 25 * DAY, 272.45, 260.1 if side == "buy" else None, id=1,
+                  params={"entry": 20, "exit": 10})
 
 
 def test_explain_signal_prompt_carries_computed_facts_and_rules() -> None:

@@ -16,13 +16,12 @@ from compass.ai.service import AiResult
 from compass.backtest import backtest
 from compass.markets.base import MarketError
 from compass.models import closed_candles
+from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT
 from compass.strategies import STRATEGIES, candles_to_df
 
 if TYPE_CHECKING:
     from compass.api.app import Services
 
-FEE_PCT = {"moex": 0.05, "crypto": 0.1}
-SLIPPAGE_PCT = 0.05
 
 
 class ExplainRequest(BaseModel):
@@ -77,7 +76,8 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
         strat = STRATEGIES.get(sig.strategy)
         if strat is None:
             raise HTTPException(404, f"Неизвестная стратегия: {sig.strategy}")
-        params = strat.resolve()
+        legacy = sig.params is None  # сигнал создан до сохранения параметров
+        params = strat.resolve(sig.params)
         cfg = svc.settings.all()
         snapshot = metrics = None
         warning = None
@@ -89,10 +89,16 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
             if len(candles) >= 30:
                 df = candles_to_df(candles)
                 metrics = backtest(
-                    df, strat.target(df, params), 100_000.0, FEE_PCT.get(sig.market, 0.1), SLIPPAGE_PCT
+                    df, strat.target(df, params), 100_000.0, DEFAULT_FEE_PCT.get(sig.market, 0.1), DEFAULT_SLIPPAGE_PCT
                 ).metrics
         except (MarketError, ValueError):
             warning = prompts.UNAVAILABLE_WARNING
+        if legacy:
+            note = (
+                "Параметры этого сигнала не сохранены (создан старой версией): "
+                "в объяснении и метриках использованы параметры по умолчанию."
+            )
+            warning = f"{warning} {note}" if warning else note
         prompt = prompts.explain_signal(sig, strat, params, snapshot, metrics, cfg["capital"], cfg["risk_pct"])
         return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))
 

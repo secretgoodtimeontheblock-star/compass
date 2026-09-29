@@ -192,7 +192,7 @@ def test_api_backtest_signals_risk_settings(env: Env) -> None:
     assert bad.status_code == 422 and "короче" in bad.json()["detail"]
 
     r = client.post("/api/risk", json={"market": "moex", "symbol": "SBER", "entry": 200, "stop": 190})
-    assert r.status_code == 200 and r.json()["qty"] == 100 and r.json()["lot_size"] == 10
+    assert r.status_code == 200 and r.json()["qty"] == 90 and r.json()["lot_size"] == 10  # 96 шт. по риску с расходами → 9 лотов
     assert client.post("/api/risk", json={"market": "moex", "symbol": "SBER", "entry": 200, "stop": 210}).status_code == 422
 
     assert client.put("/api/settings", json={"capital": 50_000}).json()["capital"] == 50_000
@@ -227,3 +227,48 @@ def test_backtest_excludes_unclosed_candle_and_says_so(env: Env) -> None:
     assert partial["run_card"]["candles"] == 59
     assert any("не закрыта" in w for w in partial["warnings"])
     assert partial["run_card"]["end_ts"] == 58 * DAY
+
+
+def test_signal_keeps_the_parameters_that_produced_it(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    env.services.settings.update(
+        {"instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 5, "exit": 3}}}}
+    )
+    res = env.services.engine.scan()
+    (new,) = donchian(res.new)
+    assert new.params == {"entry": 5, "exit": 3}
+    (sig,) = donchian(env.services.signals.list())
+    assert env.services.signals.get(sig.id).params == {"entry": 5, "exit": 3}
+    # смена настроек после сигнала не переписывает его параметры
+    env.services.settings.update(
+        {"instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 30, "exit": 20}}}}
+    )
+    assert env.services.signals.get(sig.id).params == {"entry": 5, "exit": 3}
+
+
+def test_explain_uses_signal_params_and_flags_legacy_signals(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    env.services.settings.update(
+        {
+            "instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 5, "exit": 3}}},
+            "ai_provider": "cursor",
+            "ai_consent": "cursor",
+        }
+    )
+    env.services.engine.scan()
+    (sig,) = donchian(env.services.signals.list())
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    body = client.post("/api/ai/explain-signal", json={"signal_id": sig.id}).json()
+    sent = env.cloud.calls[-1][1]
+    assert "Канал входа (свечей) = 5" in sent and "Канал входа (свечей) = 20" not in sent
+    assert not any("не сохранены" in w for w in body["warnings"])
+    # сигнал «старого» образца: параметров нет — по умолчанию и с явным предупреждением
+    with env.services.signals._conn as c:
+        c.execute("UPDATE signals SET params = NULL WHERE id = ?", (sig.id,))
+    body = client.post("/api/ai/explain-signal", json={"signal_id": sig.id, "refresh": True}).json()
+    assert "Канал входа (свечей) = 20" in env.cloud.calls[-1][1]
+    assert any("не сохранены" in w for w in body["warnings"])

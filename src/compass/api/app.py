@@ -27,7 +27,7 @@ from compass.journal import Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument, closed_candles
-from compass.risk import position_size
+from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
@@ -109,6 +109,9 @@ class RiskRequest(BaseModel):
     stop: float
     capital: float | None = None  # по умолчанию — из настроек
     risk_pct: float | None = None
+    available: float | None = None  # свободные средства; по умолчанию — весь капитал
+    fee_pct: float | None = None  # по умолчанию — типичная комиссия рынка
+    slippage_pct: float | None = None
 
 
 def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
@@ -305,6 +308,8 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         a = adapter(req.market)
         cfg = svc.settings.all()
         lot_fn = getattr(a, "lot_size", None)
+        fee = req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1)
+        slip = req.slippage_pct if req.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
         lot = lot_fn(req.symbol) if lot_fn else 1
         p = position_size(
             req.capital if req.capital is not None else cfg["capital"],
@@ -313,8 +318,24 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             req.stop,
             lot=lot,
             qty_step=None if lot_fn else CRYPTO_QTY_STEP,
+            fee_pct=fee,
+            slippage_pct=slip,
+            available=req.available,
         )
-        return {**asdict(p), "lot_size": lot}
+        return {
+            **asdict(p),
+            "lot_size": lot,
+            "fee_pct": fee,
+            "slippage_pct": slip,
+            "assumptions": [
+                "Потеря при стопе — расчётный сценарий, а не гарантированный максимум: цена может пройти стоп гэпом.",
+                (
+                    f"Считается вход и выход по стопу с комиссией {fee:g}% и проскальзыванием {slip:g}% "
+                    f"с каждой стороны; ухудшенное исполнение — проскальзывание ×{WORSE_SLIPPAGE_MULT:g}."
+                ),
+                "Приложение ничего не исполняет и не блокирует: лимит — предупреждение.",
+            ],
+        }
 
     @app.get("/api/settings")
     def settings_get() -> dict:

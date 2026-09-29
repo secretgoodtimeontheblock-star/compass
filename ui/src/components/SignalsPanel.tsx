@@ -114,17 +114,17 @@ function SignalCard({
           </dd>
           <dt>Вход обойдётся</dt>
           <dd>{fmtNum(risk.cost)}</dd>
-          <dt>Потеря при стопе</dt>
+          <dt>Расчётная потеря при стопе</dt>
           <dd>{fmtNum(risk.risk_amount)}</dd>
-          {risk.capped && (
-            <>
-              <dt className="down">Внимание</dt>
-              <dd className="down">ограничено капиталом</dd>
-            </>
-          )}
+          <dt>При худшем исполнении</dt>
+          <dd>{fmtNum(risk.risk_amount_worse)}</dd>
         </dl>
       )}
-      {buy && risk && (
+      {risk?.warning && <div className="notice" style={{ marginTop: 6 }}>{risk.warning}</div>}
+      {risk && (
+        <p className="caveat" style={{ marginTop: 6 }}>{risk.assumptions.join(" ")}</p>
+      )}
+      {buy && risk && risk.qty > 0 && (
         <button
           className="btn small primary"
           style={{ marginTop: 8 }}

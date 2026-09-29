@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import threading
@@ -43,12 +44,17 @@ class Signal:
     id: int | None = None
     created_at: int | None = None
     seen: bool = False
+    params: dict[str, int] | None = None  # параметры стратегии; None — сигнал создан до их сохранения
 
 
 @dataclass(frozen=True, slots=True)
 class ScanResult:
     new: list[Signal]
     errors: list[str]
+
+
+def _row_to_signal(r: tuple) -> Signal:
+    return Signal(*r[:10], seen=bool(r[10]), params=json.loads(r[11]) if r[11] else None)
 
 
 class SignalStore:
@@ -61,9 +67,10 @@ class SignalStore:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT OR IGNORE INTO signals "
-                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (s.market, s.symbol, s.tf, s.strategy, s.side, s.candle_ts, s.price, s.stop, int(time.time())),
+                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (s.market, s.symbol, s.tf, s.strategy, s.side, s.candle_ts, s.price, s.stop, int(time.time()),
+                 None if s.params is None else json.dumps(s.params, sort_keys=True)),
             )
         return cur.rowcount == 1
 
@@ -84,21 +91,21 @@ class SignalStore:
             where.append("symbol = ?")
             args.append(symbol)
         sql = (
-            "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen "
+            "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params "
             "FROM signals " + (f"WHERE {' AND '.join(where)} " if where else "") + "ORDER BY id DESC LIMIT ?"
         )
         with self._lock:
             rows = self._conn.execute(sql, (*args, limit)).fetchall()
-        return [Signal(*r[:10], seen=bool(r[10])) for r in rows]
+        return [_row_to_signal(r) for r in rows]
 
     def get(self, signal_id: int) -> Signal | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen "
+                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params "
                 "FROM signals WHERE id = ?",
                 (signal_id,),
             ).fetchone()
-        return Signal(*row[:10], seen=bool(row[10])) if row else None
+        return _row_to_signal(row) if row else None
 
     def mark_all_seen(self) -> int:
         with self._lock, self._conn:
@@ -164,7 +171,7 @@ class SignalEngine:
                     stop = round(price - ATR_STOP_MULT * float(last_atr), 8)
                     if stop <= 0:
                         stop = None
-                sig = Signal(inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop)
+                sig = Signal(inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop, params=params)
                 if self._store.insert(sig):
                     new.append(sig)
                     self._notifier.send(sig)

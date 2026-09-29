@@ -164,8 +164,14 @@ export interface RiskResponse {
   lots: number;
   cost: number;
   risk_amount: number;
+  risk_amount_worse: number;
+  budget: number;
   capped: boolean;
+  warning: string | null;
   lot_size: number;
+  fee_pct: number;
+  slippage_pct: number;
+  assumptions: string[];
 }
 
 export type AiProviderId = "off" | "cursor" | "claude" | "ollama";
