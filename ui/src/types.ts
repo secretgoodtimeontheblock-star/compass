@@ -9,12 +9,14 @@ export interface Market {
   source: string;
   delay_seconds: number | null;
   live_supported: boolean;
+  instruments: number;
 }
 
 export interface Instrument {
   market: MarketId;
   symbol: string;
   name: string;
+  kind?: string;
 }
 
 export interface Candle {

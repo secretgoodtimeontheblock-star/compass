@@ -9,6 +9,7 @@ from typing import Any
 
 import ccxt
 
+from compass.catalog import match_instruments, okx_catalog
 from compass.markets.base import MarketError
 from compass.models import TIMEFRAME_MS, Candle, Instrument
 
@@ -28,6 +29,9 @@ class CryptoAdapter:
         self.exchange_id = exchange_id
         self.proxy = proxy
         self.name = f"Крипта ({exchange_id})"
+        # Готовый объект биржи — в тестах. Справочник OKX только у живого адаптера,
+        # иначе поиск теста смешается с полным списком пар.
+        self._catalog = list(okx_catalog()) if exchange is None and exchange_id == "okx" else []
         if exchange is not None:
             self._ex = exchange
             return
@@ -62,7 +66,12 @@ class CryptoAdapter:
             raise MarketError(f"Биржа недоступна ({self._ex.id}): {e}") from e
         return sorted(out.values(), key=lambda c: c.ts)[-limit:]
 
+    def catalog_size(self) -> int:
+        return len(self._catalog)
+
     def search(self, query: str) -> list[Instrument]:
+        if self._catalog:
+            return match_instruments(self._catalog, query, self.id)
         try:
             markets = self._ex.load_markets()
         except ccxt.BaseError as e:

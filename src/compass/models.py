@@ -20,6 +20,7 @@ class Instrument:
     symbol: str
     name: str
     market: str  # id адаптера: "moex" | "crypto"
+    kind: str = ""  # share | bond | fx | "" для криптопар
 
 
 # Единые названия таймфреймов; адаптер сам переводит их в свои коды.

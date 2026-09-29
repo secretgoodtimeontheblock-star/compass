@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -30,7 +31,16 @@ from compass.strategies import STRATEGIES, candles_to_df
 from compass.watchlist import Watchlist
 
 CRYPTO_QTY_STEP = 1e-6
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"  # собранный интерфейс (ui/ → pnpm build)
+
+
+def static_dir() -> Path:
+    """В установленной сборке интерфейс лежит рядом с распакованным exe, не в исходниках."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "static"
+    return Path(__file__).resolve().parent.parent / "static"
+
+
+STATIC_DIR = static_dir()
 
 
 @dataclass
@@ -129,6 +139,7 @@ def create_app(svc: Services) -> FastAPI:
                 "source": getattr(a, "source_id", a.id),
                 "delay_seconds": 900 if a.id == "moex" else None,
                 "live_supported": a.id == "crypto" and svc.live is not None,
+                "instruments": getattr(a, "catalog_size", lambda: 0)(),
             }
             for a in svc.adapters.values()
         ]

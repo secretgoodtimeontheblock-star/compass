@@ -13,8 +13,8 @@
 Telegram-уведомления, журнал сделок и интерфейс: график со свечами, объёмом, SMA и
 маркерами сигналов/своих сделок, избранное, лента сигналов, проверка стратегий с кривой
 капитала, журнал, тёмная/светлая тема. AI объясняет сигналы, разбирает журнал и отвечает
-на вопросы в режиме обучения (Cursor CLI, Claude API, Ollama). Следующий этап —
-упаковка и установщик, см. [docs/PLAN.md](docs/PLAN.md).
+на вопросы в режиме обучения (Cursor CLI, Claude API, Ollama). Установщик Windows —
+`CompassSetup.exe` в релизах, см. [docs/PLAN.md](docs/PLAN.md).
 
 ## Как это работает
 
@@ -64,6 +64,18 @@ Telegram-уведомления, журнал сделок и интерфейс
 `/api/signals`, `/api/scan`, `/api/risk`, `/api/settings`, `/api/journal`.
 AI: `/api/ai/status`, `/api/ai/providers`, `/api/ai/providers/{provider_id}/models`,
 `/api/ai/explain-signal`, `/api/ai/review-journal`, `/api/ai/ask`.
+
+## Установка на Windows
+
+Скачайте `CompassSetup.exe` из [релизов](https://github.com/KeinReno/compass/releases).
+Установщик кладёт программу в `%LOCALAPPDATA%\Compass`, создаёт ярлык на рабочем столе
+и в меню Пуск и сразу открывает окно. Права администратора, Python и Node не нужны.
+Нужен Microsoft Edge WebView2: на Windows 11 он уже есть. Если окно не открылось, Compass покажет,
+чего не хватает, и запишет подробности в `%APPDATA%\Compass\compass.log`.
+
+Поиск знает справочник МосБиржи (акции и фонды TQBR, ОФЗ, корпоративные облигации, валюта SELT —
+то, что видно у брокеров вроде Альфа-Инвестиций) и все спотовые пары OKX. История свечей
+загружается только для открытого тикера.
 
 ## Запуск (разработка)
 

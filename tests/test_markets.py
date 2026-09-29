@@ -78,7 +78,10 @@ def test_moex_search_keeps_only_traded_shares() -> None:
             ],
         }
     }
-    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload))))
+    a = MoexAdapter(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload))),
+        catalog=[],
+    )
     assert [i.symbol for i in a.search("SBER")] == ["SBER", "SBERP"]
 
 
@@ -113,6 +116,29 @@ def test_crypto_does_not_loop_when_cursor_stuck() -> None:
     ex = FakeExchange([[1000, 1, 1, 1, 1, 1], [1000, 1, 1, 1, 1, 1]])
     CryptoAdapter(exchange=ex).fetch_candles("BTC/USDT", "1h", 5_000_000, 100)
     assert len(ex.calls) <= 2
+
+
+def test_bundled_catalogs_include_broker_and_okx_names() -> None:
+    from compass.catalog import moex_catalog, okx_catalog
+
+    moex = moex_catalog()
+    symbols = {row["symbol"] for row in moex}
+    assert {"SBER", "TMOS", "USD000UTSTOM"} <= symbols
+    assert any(row["kind"] == "bond" for row in moex)
+    assert any(row["symbol"] == "BTC/USDT" for row in okx_catalog())
+    assert len(okx_catalog()) > 100
+
+
+def test_catalog_search_ranks_ticker_above_name() -> None:
+    catalog = [
+        {"symbol": "SBER", "name": "Сбербанк", "lot": 10, "engine": "stock", "market": "shares", "board": "TQBR"},
+        {"symbol": "SBERP", "name": "Сбербанк-п", "lot": 10, "engine": "stock", "market": "shares", "board": "TQBR"},
+        {"symbol": "USD000UTSTOM", "name": "USD_TOD", "lot": 1000, "engine": "currency", "market": "selt", "board": "CETS"},
+    ]
+    a = MoexAdapter(httpx.Client(), catalog=catalog)
+    assert [i.symbol for i in a.search("sber")] == ["SBER", "SBERP"]
+    assert a.lot_size("SBER") == 10
+    assert a.catalog_size() == 3
 
 
 def test_crypto_search_spot_only() -> None:

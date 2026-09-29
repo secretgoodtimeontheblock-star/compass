@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from compass.catalog import match_instruments, moex_catalog
 from compass.markets.base import MarketError
 from compass.models import TIMEFRAME_MS, Candle, Instrument
 
@@ -31,9 +32,25 @@ class MoexAdapter:
     name = "Мосбиржа (акции)"
     timeframes = tuple(_INTERVAL)
 
-    def __init__(self, client: httpx.Client | None = None, board: str = "TQBR") -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        board: str = "TQBR",
+        catalog: list[dict] | None = None,
+    ) -> None:
         self._client = client or httpx.Client(timeout=15.0)
         self._board = board
+        rows = moex_catalog() if catalog is None else catalog
+        self._catalog = {str(row["symbol"]): row for row in rows}
+
+    def catalog_size(self) -> int:
+        return len(self._catalog)
+
+    def _locate(self, symbol: str) -> tuple[str, str, str]:
+        row = self._catalog.get(symbol)
+        if row:
+            return row["engine"], row["market"], row["board"]
+        return "stock", "shares", self._board
 
     def _get(self, path: str, params: dict) -> dict:
         try:
@@ -55,7 +72,8 @@ class MoexAdapter:
             since_ms = int(time.time() * 1000 - span)
         start_dt = datetime.fromtimestamp(since_ms / 1000, MSK)
 
-        path = f"/engines/stock/markets/shares/boards/{self._board}/securities/{symbol}/candles.json"
+        engine, market, board = self._locate(symbol)
+        path = f"/engines/{engine}/markets/{market}/boards/{board}/securities/{symbol}/candles.json"
         out: list[Candle] = []
         offset = 0
         while True:
@@ -94,8 +112,12 @@ class MoexAdapter:
 
     def lot_size(self, symbol: str) -> int:
         """Размер лота: акции на МосБирже торгуются лотами (10, 100, 1000 штук)."""
+        row = self._catalog.get(symbol)
+        if row and row.get("lot"):
+            return int(row["lot"])
+        engine, market, board = self._locate(symbol)
         data = self._get(
-            f"/engines/stock/markets/shares/boards/{self._board}/securities/{symbol}.json",
+            f"/engines/{engine}/markets/{market}/boards/{board}/securities/{symbol}.json",
             {"securities.columns": "SECID,LOTSIZE"},
         )
         block = data.get("securities") or {}
@@ -105,6 +127,8 @@ class MoexAdapter:
         return int(rows[0][block["columns"].index("LOTSIZE")])
 
     def search(self, query: str) -> list[Instrument]:
+        if self._catalog:
+            return match_instruments(self._catalog.values(), query, self.id)
         data = self._get(
             "/securities.json",
             {"q": query, "limit": 20, "securities.columns": "secid,shortname,is_traded,group"},

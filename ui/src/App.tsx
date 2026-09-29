@@ -225,7 +225,7 @@ export default function App() {
             </button>
           ))}
         </div>
-        <SearchBox market={market} onPick={addToWatch} />
+        <SearchBox market={market} catalogSize={marketInfo?.instruments} onPick={addToWatch} />
         <div className="spacer" />
         <button className="btn" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>С чего начать</button>
         <button className="btn primary" onClick={scan} disabled={scanBusy || items.length === 0 && (watchApi.data ?? []).length === 0}>

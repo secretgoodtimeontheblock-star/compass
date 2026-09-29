@@ -4,10 +4,13 @@ import type { Instrument, MarketId } from "../types";
 
 interface Props {
   market: MarketId;
+  catalogSize?: number;
   onPick: (i: Instrument) => void;
 }
 
-export function SearchBox({ market, onPick }: Props) {
+const KIND: Record<string, string> = { share: "акция или фонд", bond: "облигация", fx: "валюта" };
+
+export function SearchBox({ market, catalogSize, onPick }: Props) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Instrument[]>([]);
   const [busy, setBusy] = useState(false);
@@ -69,7 +72,11 @@ export function SearchBox({ market, onPick }: Props) {
       <input
         type="search"
         value={q}
-        placeholder={market === "moex" ? "Найти акцию: SBER, Газпром…" : "Найти пару: BTC, ETH…"}
+        placeholder={
+          market === "moex"
+            ? `Акция, фонд, облигация или валюта${catalogSize ? ` · ${catalogSize}` : ""}`
+            : `Спотовая пара OKX${catalogSize ? ` · ${catalogSize}` : ""}`
+        }
         aria-label="Поиск инструмента"
         onChange={(e) => {
           setQ(e.target.value);
@@ -89,7 +96,9 @@ export function SearchBox({ market, onPick }: Props) {
           {results.map((r) => (
             <button key={r.symbol} onClick={() => pick(r)} role="option">
               <b>{r.symbol}</b>
-              <span className="muted">{r.name !== r.symbol ? r.name : ""}</span>
+              <span className="muted">
+                {[KIND[r.kind ?? ""], r.name !== r.symbol ? r.name : ""].filter(Boolean).join(" · ")}
+              </span>
             </button>
           ))}
         </div>

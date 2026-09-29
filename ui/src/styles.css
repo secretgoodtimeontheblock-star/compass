@@ -377,6 +377,13 @@ textarea {
 .search-results button:focus-visible {
   background: var(--accent-bg);
 }
+.search-results button span {
+  min-width: 0;
+  margin-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---------- вотчлист ---------- */
 .watch-item {
