@@ -113,7 +113,13 @@ export const api = {
   journal: (p: { market?: MarketId; symbol?: string } = {}) =>
     request<JournalEntry[]>(`/api/journal?${qs(p)}`),
   positions: () => request<Position[]>("/api/journal/positions"),
-  addJournal: (e: Omit<JournalEntry, "id" | "signal_id"> & { signal_id?: number | null }) =>
+  addJournal: (
+    e: Omit<JournalEntry, "id" | "signal_id" | "planned_stop" | "reason"> & {
+      signal_id?: number | null;
+      planned_stop?: number | null;
+      reason?: string;
+    },
+  ) =>
     request<JournalEntry>("/api/journal", json("POST", e)),
   removeJournal: (id: number) => request<void>(`/api/journal/${id}`, { method: "DELETE" }),
 };

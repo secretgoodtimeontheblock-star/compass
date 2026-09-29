@@ -10,9 +10,10 @@ interface Props {
   strategies: Strategy[];
   settings: Settings | undefined;
   theme: string;
+  onStrategiesSaved: () => void;
 }
 
-export function BacktestPanel({ instrument, tf, strategies, settings, theme }: Props) {
+export function BacktestPanel({ instrument, tf, strategies, settings, theme, onStrategiesSaved }: Props) {
   const [sid, setSid] = useState("");
   const [params, setParams] = useState<Record<string, number>>({});
   const [capital, setCapital] = useState(100_000);
@@ -21,6 +22,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme }: P
   const [res, setRes] = useState<BacktestResponse>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState<string>();
 
   const strat = strategies.find((s) => s.id === sid) ?? strategies[0];
 
@@ -43,7 +45,22 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme }: P
     setError(undefined);
   }, [instrument?.symbol, instrument?.market, tf, sid]);
 
-  useEffect(() => setParams({}), [sid]);
+  const profileKey = instrument ? `${instrument.market}|${instrument.symbol}` : "";
+  const savedProfile = settings?.instrument_strategies?.[profileKey];
+
+  useEffect(() => {
+    setParams({});
+    setSavedNote(undefined);
+    if (!savedProfile?.strategy && strategies[0]) setSid(strategies[0].id);
+    // Сброс только при смене тикера.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrument?.market, instrument?.symbol]);
+
+  useEffect(() => {
+    if (!savedProfile?.strategy) return;
+    setSid(savedProfile.strategy);
+    setParams(savedProfile.params);
+  }, [profileKey, savedProfile]);
 
   if (!instrument || !strat) {
     return <div className="empty">Выберите тикер, чтобы проверить на нём стратегию.</div>;
@@ -82,7 +99,14 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme }: P
       <div className="form-grid" style={{ paddingTop: 10 }}>
         <label className="field full">
           <span>Стратегия</span>
-          <select value={strat.id} onChange={(e) => setSid(e.target.value)}>
+          <select
+            value={strat.id}
+            onChange={(e) => {
+              setSid(e.target.value);
+              setParams({});
+              setSavedNote(undefined);
+            }}
+          >
             {strategies.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -118,6 +142,58 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme }: P
           <span>Проскальзывание, %</span>
           <input type="number" min={0} step={0.01} value={slip} onChange={(e) => setSlip(Number(e.target.value))} />
         </label>
+        <p className="muted full" style={{ margin: 0, fontSize: 12 }}>
+          {savedProfile
+            ? "Поиск сигналов по этому тикеру использует эту стратегию и эти параметры."
+            : "Поиск сигналов по этому тикеру проверяет все стратегии с параметрами по умолчанию."}
+        </p>
+        <button
+          className="btn full"
+          disabled={busy}
+          onClick={async () => {
+            if (!settings) return;
+            setBusy(true);
+            setError(undefined);
+            try {
+              const next = { ...settings.instrument_strategies };
+              next[profileKey] = { strategy: strat.id, params };
+              await api.saveSettings({ instrument_strategies: next });
+              setSavedNote("Сохранено: сканер будет искать сигналы по этим настройкам.");
+              onStrategiesSaved();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Не удалось сохранить настройки");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Искать сигналы по этим настройкам
+        </button>
+        {savedProfile && (
+          <button
+            className="btn ghost full"
+            disabled={busy}
+            onClick={async () => {
+              if (!settings) return;
+              setBusy(true);
+              setError(undefined);
+              try {
+                const next = { ...settings.instrument_strategies };
+                delete next[profileKey];
+                await api.saveSettings({ instrument_strategies: next });
+                setSavedNote("Сканер снова проверяет все стратегии с параметрами по умолчанию.");
+                onStrategiesSaved();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Не удалось сохранить настройки");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Снова проверять все стратегии
+          </button>
+        )}
+        {savedNote && <p className="notice full">{savedNote}</p>}
         <button className="btn primary full" disabled={busy} onClick={run}>
           {busy ? "Считаем…" : `Проверить на ${instrument.symbol} (${tf})`}
         </button>
@@ -175,8 +251,9 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme }: P
         </>
       )}
       <p className="caveat">
-        Проверка на истории показывает, как правило работало раньше, и не гарантирует будущий результат. В
-        расчёте нет стоп-лоссов, торговля только в покупку, без плеча, весь капитал в каждой сделке.
+        В этом расчёте комиссия {fee}% и проскальзывание {slip}% на каждую сторону сделки. Проверка на
+        истории показывает, как правило работало раньше, и не гарантирует будущий результат. В расчёте нет
+        стоп-лоссов, торговля только в покупку, без плеча, весь капитал в каждой сделке.
       </p>
     </div>
   );

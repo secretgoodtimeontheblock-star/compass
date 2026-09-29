@@ -26,6 +26,7 @@ _INTERVAL = {"1m": 1, "10m": 10, "1h": 60, "1d": 24}
 
 
 class MoexAdapter:
+    source_id = "moex:iss"
     id = "moex"
     name = "Мосбиржа (акции)"
     timeframes = tuple(_INTERVAL)

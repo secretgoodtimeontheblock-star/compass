@@ -10,10 +10,12 @@
 
 from __future__ import annotations
 
-import sqlite3
-import threading
+import csv
+import io
 import time
 from dataclasses import dataclass, replace
+
+from compass.db import Connection
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,8 @@ class Entry:
     fee: float = 0.0
     note: str = ""
     signal_id: int | None = None
+    planned_stop: float | None = None
+    reason: str = ""
     id: int | None = None
 
 
@@ -95,16 +99,21 @@ def validate(e: Entry) -> None:
         raise ValueError("Некорректное время сделки")
     if len(e.note) > 2000:
         raise ValueError("Заметка слишком длинная (максимум 2000 символов)")
+    if len(e.reason) > 500:
+        raise ValueError("Причина слишком длинная (максимум 500 символов)")
+    if e.planned_stop is not None and not (e.planned_stop > 0):
+        raise ValueError("Плановый стоп должен быть больше нуля")
 
 
 class Journal:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Connection) -> None:
         self._conn = conn
-        self._lock = threading.Lock()
+        self._lock = conn.lock
 
     def list(self, market: str | None = None, symbol: str | None = None) -> list[Entry]:
         sql = (
-            "SELECT market, symbol, side, qty, price, ts, fee, note, signal_id, id FROM journal"
+            "SELECT market, symbol, side, qty, price, ts, fee, note, signal_id, planned_stop, reason, id "
+            "FROM journal"
         )
         where, args = [], []
         if market:
@@ -129,9 +138,22 @@ class Journal:
             same = [x for x in self._all() if (x.market, x.symbol) == (e.market, e.symbol)]
             summarize([*same, e])
             cur = self._conn.execute(
-                "INSERT INTO journal (market, symbol, side, qty, price, ts, fee, note, signal_id, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (e.market, e.symbol, e.side, e.qty, e.price, e.ts, e.fee, e.note, e.signal_id, int(time.time())),
+                "INSERT INTO journal (market, symbol, side, qty, price, ts, fee, note, signal_id, "
+                "planned_stop, reason, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    e.market,
+                    e.symbol,
+                    e.side,
+                    e.qty,
+                    e.price,
+                    e.ts,
+                    e.fee,
+                    e.note,
+                    e.signal_id,
+                    e.planned_stop,
+                    e.reason,
+                    int(time.time()),
+                ),
             )
         return replace(e, id=cur.lastrowid)
 
@@ -147,6 +169,45 @@ class Journal:
 
     def _all(self) -> list[Entry]:
         rows = self._conn.execute(
-            "SELECT market, symbol, side, qty, price, ts, fee, note, signal_id, id FROM journal"
+            "SELECT market, symbol, side, qty, price, ts, fee, note, signal_id, planned_stop, reason, id "
+            "FROM journal"
         ).fetchall()
         return [Entry(*r) for r in rows]
+
+    def to_csv(self) -> str:
+        """Хронологический экспорт всех записей. BOM — чтобы Excel открыл кириллицу."""
+        buf = io.StringIO()
+        buf.write("\ufeff")
+        writer = csv.writer(buf)
+        writer.writerow(
+            [
+                "market",
+                "symbol",
+                "side",
+                "qty",
+                "price",
+                "fee",
+                "ts_ms",
+                "reason",
+                "planned_stop",
+                "note",
+                "signal_id",
+            ]
+        )
+        for e in sorted(self.list(), key=lambda x: (x.ts, x.id or 0)):
+            writer.writerow(
+                [
+                    e.market,
+                    e.symbol,
+                    e.side,
+                    e.qty,
+                    e.price,
+                    e.fee,
+                    e.ts,
+                    e.reason,
+                    "" if e.planned_stop is None else e.planned_stop,
+                    e.note,
+                    "" if e.signal_id is None else e.signal_id,
+                ]
+            )
+        return buf.getvalue()

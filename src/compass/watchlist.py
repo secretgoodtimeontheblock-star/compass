@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import sqlite3
-import threading
 import time
 
+from compass.db import Connection
 from compass.models import Instrument
 
 
 class Watchlist:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Connection) -> None:
         self._conn = conn
-        self._lock = threading.Lock()
+        self._lock = conn.lock
 
     def list(self) -> list[Instrument]:
         with self._lock:

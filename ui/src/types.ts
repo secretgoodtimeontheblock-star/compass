@@ -6,6 +6,9 @@ export interface Market {
   id: MarketId;
   name: string;
   timeframes: string[];
+  source: string;
+  delay_seconds: number | null;
+  live_supported: boolean;
 }
 
 export interface Instrument {
@@ -25,8 +28,12 @@ export interface Candle {
 
 export interface CandlesResponse {
   stale: boolean;
+  source: string;
+  fetched_at: number | null;
   candles: Candle[];
 }
+
+export type LiveState = "connecting" | "restoring" | "live" | "reconnecting" | "unavailable";
 
 export interface Signal {
   id: number;
@@ -107,6 +114,19 @@ export interface Settings {
   ai_provider: AiProviderId;
   ai_models: Partial<Record<AiProviderId, string>>;
   ai_consent: string;
+  instrument_strategies: Record<string, { strategy: string; params: Record<string, number> }>;
+}
+
+export interface JournalDraft {
+  market: MarketId;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: string;
+  price: string;
+  plannedStop: string;
+  reason: string;
+  note: string;
+  signalId: number;
 }
 
 export interface AiStatus {
@@ -149,6 +169,8 @@ export interface JournalEntry {
   fee: number;
   note: string;
   signal_id: number | null;
+  planned_stop: number | null;
+  reason: string;
 }
 
 export interface Position {

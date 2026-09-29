@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,7 @@ from compass.api.ai_routes import register_ai_routes
 from compass.backtest import backtest
 from compass.cache import CandleCache
 from compass.journal import Entry, Journal
+from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument
 from compass.risk import position_size
@@ -43,6 +44,7 @@ class Services:
     journal: Journal
     ai: AiService
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
+    live: OkxLive | None = None
 
 
 class JournalRequest(BaseModel):
@@ -55,6 +57,8 @@ class JournalRequest(BaseModel):
     fee: float = 0.0
     note: str = ""
     signal_id: int | None = None
+    planned_stop: float | None = None
+    reason: str = ""
 
 
 class WatchItem(BaseModel):
@@ -120,7 +124,12 @@ def create_app(svc: Services) -> FastAPI:
     @app.get("/api/markets")
     def markets() -> list[dict]:
         return [
-            {"id": a.id, "name": a.name, "timeframes": list(a.timeframes)}
+            {
+                "id": a.id, "name": a.name, "timeframes": list(a.timeframes),
+                "source": getattr(a, "source_id", a.id),
+                "delay_seconds": 900 if a.id == "moex" else None,
+                "live_supported": a.id == "crypto" and svc.live is not None,
+            }
             for a in svc.adapters.values()
         ]
 
@@ -134,13 +143,31 @@ def create_app(svc: Services) -> FastAPI:
     ) -> dict:
         adapter(market)
         res = svc.cache.get(market, symbol, tf, limit)
-        return {
-            "stale": res.stale,
-            "candles": [
-                {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume}
-                for c in res.candles
-            ],
-        }
+        return history_dto(res)
+
+    @app.get("/api/live")
+    async def live_candles(request: Request, symbol: str, tf: str = "1d"):
+        if svc.live is None:
+            raise HTTPException(409, "Публичный поток доступен только для OKX")
+        subscription(symbol, tf)
+        # Локальный endpoint не должен открывать потоки по запросу стороннего сайта.
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            raise HTTPException(403, "Запрос должен идти из Compass")
+        if svc.live.connections >= svc.live.max_connections:
+            raise HTTPException(429, "Слишком много открытых графиков с потоком")
+
+        async def stream():
+            svc.live.connections += 1
+            try:
+                async for event in svc.live.events(symbol, tf):
+                    yield event
+            finally:
+                svc.live.connections -= 1
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+        })
 
     @app.get("/api/watchlist")
     def watchlist_list() -> list[dict]:
@@ -240,6 +267,14 @@ def create_app(svc: Services) -> FastAPI:
         return svc.settings.update(changes)
 
     # --- журнал сделок ---
+
+    @app.get("/api/journal.csv")
+    def journal_csv() -> Response:
+        return Response(
+            content=svc.journal.to_csv(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="compass-journal.csv"'},
+        )
 
     @app.get("/api/journal")
     def journal_list(market: str | None = None, symbol: str | None = None) -> list[dict]:

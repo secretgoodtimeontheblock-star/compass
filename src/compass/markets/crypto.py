@@ -24,6 +24,9 @@ class CryptoAdapter:
         self, exchange_id: str = "okx", proxy: str | None = None, exchange: Any = None
     ) -> None:
         """`exchange` — готовый объект (для тестов); иначе создаётся по exchange_id."""
+        self.source_id = f"crypto:{exchange_id}"
+        self.exchange_id = exchange_id
+        self.proxy = proxy
         self.name = f"Крипта ({exchange_id})"
         if exchange is not None:
             self._ex = exchange

@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
-import type { Instrument, JournalEntry, Position } from "../types";
+import type { Instrument, JournalDraft, JournalEntry, Position } from "../types";
 import { AiAnswer } from "./AiAnswer";
 
 interface Props {
@@ -12,9 +12,10 @@ interface Props {
   lastPrice: number | undefined;
   onChanged: () => void;
   onSelect: (i: Instrument) => void;
+  draft: JournalDraft | null;
 }
 
-export function JournalPanel({ instrument, entries, positions, lastPrice, onChanged, onSelect }: Props) {
+export function JournalPanel({ instrument, entries, positions, lastPrice, onChanged, onSelect, draft }: Props) {
   const ai = useAiRun();
   const review = (refresh = false) => void ai.run((r) => api.reviewJournal({}, r), refresh);
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -23,8 +24,23 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
   const [fee, setFee] = useState("0");
   const [when, setWhen] = useState(() => toLocalInput(Date.now()));
   const [note, setNote] = useState("");
+  const [reason, setReason] = useState("");
+  const [plannedStop, setPlannedStop] = useState("");
+  const [signalId, setSignalId] = useState<number | null>(null);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!draft) return;
+    setSide(draft.side);
+    setQty(draft.qty);
+    setPrice(draft.price);
+    setReason(draft.reason);
+    setPlannedStop(draft.plannedStop);
+    setNote(draft.note);
+    setSignalId(draft.signalId);
+    setWhen(toLocalInput(Date.now()));
+  }, [draft]);
 
   const submit = async () => {
     if (!instrument) return;
@@ -40,9 +56,15 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
         ts: new Date(when).getTime(),
         fee: Number(fee) || 0,
         note,
+        reason,
+        planned_stop: plannedStop ? Number(plannedStop) : null,
+        signal_id: signalId,
       });
       setQty("");
       setNote("");
+      setReason("");
+      setPlannedStop("");
+      setSignalId(null);
       setWhen(toLocalInput(Date.now()));
       onChanged();
     } catch (e) {
@@ -62,12 +84,32 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
     }
   };
 
+  const exportCsv = async () => {
+    setError(undefined);
+    try {
+      const res = await fetch("/api/journal.csv");
+      if (!res.ok) throw new Error("Не удалось выгрузить журнал");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "compass-journal.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось выгрузить журнал");
+    }
+  };
+
   const open = positions.filter((p) => p.qty > 0 || p.trades > 0);
 
   return (
     <div className="scroll">
       <div className="panel-head" style={{ paddingBottom: 2 }}>
         Мои позиции
+        <button className="btn small" onClick={() => void exportCsv()}>
+          Экспорт CSV
+        </button>
       </div>
       {open.length === 0 ? (
         <div className="empty" style={{ paddingTop: 4 }}>
@@ -153,8 +195,24 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
               <span>Когда</span>
               <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
             </label>
+            {side === "buy" && (
+              <label className="field">
+                <span>Плановый стоп</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={plannedStop}
+                  onChange={(e) => setPlannedStop(e.target.value)}
+                />
+              </label>
+            )}
             <label className="field full">
-              <span>Заметка: почему вошли или вышли</span>
+              <span>Причина входа или выхода</span>
+              <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+            </label>
+            <label className="field full">
+              <span>Заметка</span>
               <textarea value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />
             </label>
             <button className="btn primary full" disabled={busy || !(Number(qty) > 0)} onClick={submit}>
@@ -183,6 +241,10 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
                   {fmtNum(e.qty, 6)} × {fmtPrice(e.price)}
                   {e.fee > 0 && <span className="muted"> · комиссия {fmtNum(e.fee)}</span>}
                 </div>
+                {e.planned_stop != null && e.side === "buy" && (
+                  <div className="muted">Плановый стоп {fmtPrice(e.planned_stop)}</div>
+                )}
+                {e.reason && <div style={{ marginTop: 4 }}>{e.reason}</div>}
                 {e.note && <div className="muted" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{e.note}</div>}
                 <button className="btn ghost small" style={{ marginTop: 4 }} onClick={() => remove(e.id)}>
                   Удалить запись

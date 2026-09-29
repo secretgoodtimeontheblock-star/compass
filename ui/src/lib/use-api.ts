@@ -14,6 +14,9 @@ export interface ApiState<T> {
  */
 export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs?: number): ApiState<T> {
   const [data, setData] = useState<T>();
+  const dataDeps = useRef<unknown[]>([]);
+  const currentDeps = useRef(deps);
+  currentDeps.current = deps;
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
@@ -25,10 +28,12 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
     const f = fnRef.current;
     if (!f) return;
     const id = ++seq.current;
+    const requestedDeps = currentDeps.current;
     if (!silent) setLoading(true);
     try {
       const res = await f();
       if (id !== seq.current) return;
+      dataDeps.current = requestedDeps;
       setData(res);
       setError(undefined);
     } catch (e) {
@@ -48,6 +53,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
       return;
     }
     void run(false);
+    return () => { seq.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
 
@@ -57,7 +63,8 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
     return () => clearInterval(id);
   }, [pollMs, run]);
 
-  return { data, error, loading, reload: () => setTick((t) => t + 1) };
+  const same = dataDeps.current.length === deps.length && deps.every((d, i) => Object.is(d, dataDeps.current[i]));
+  return { data: same ? data : undefined, error, loading, reload: () => setTick((t) => t + 1) };
 }
 
 /** localStorage без падений: в приватном окне/заблокированном хранилище просто без памяти. */

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, STRATEGY_SHORT } from "../lib/format";
-import type { Instrument, RiskResponse, Signal } from "../types";
+import type { Instrument, JournalDraft, RiskResponse, Signal } from "../types";
 import { AiAnswer } from "./AiAnswer";
 
 interface Props {
@@ -11,9 +11,10 @@ interface Props {
   unseenCount: number;
   onSelect: (i: Instrument) => void;
   onMarkSeen: () => void;
+  onRecord: (draft: JournalDraft) => void;
 }
 
-export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkSeen }: Props) {
+export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkSeen, onRecord }: Props) {
   const [onlySelected, setOnlySelected] = useState(false);
   const list = onlySelected && selected ? signals.filter((s) => s.symbol === selected.symbol) : signals;
 
@@ -37,14 +38,22 @@ export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkS
           </div>
         )}
         {list.map((s) => (
-          <SignalCard key={s.id} s={s} onSelect={onSelect} />
+          <SignalCard key={s.id} s={s} onSelect={onSelect} onRecord={onRecord} />
         ))}
       </div>
     </>
   );
 }
 
-function SignalCard({ s, onSelect }: { s: Signal; onSelect: (i: Instrument) => void }) {
+function SignalCard({
+  s,
+  onSelect,
+  onRecord,
+}: {
+  s: Signal;
+  onSelect: (i: Instrument) => void;
+  onRecord: (draft: JournalDraft) => void;
+}) {
   const ai = useAiRun();
   const explain = (refresh = false) => void ai.run((r) => api.explainSignal(s.id, r), refresh);
   const [risk, setRisk] = useState<RiskResponse>();
@@ -114,6 +123,27 @@ function SignalCard({ s, onSelect }: { s: Signal; onSelect: (i: Instrument) => v
             </>
           )}
         </dl>
+      )}
+      {buy && risk && (
+        <button
+          className="btn small primary"
+          style={{ marginTop: 8 }}
+          onClick={() =>
+            onRecord({
+              market: s.market,
+              symbol: s.symbol,
+              side: "buy",
+              qty: String(risk.qty),
+              price: String(s.price),
+              plannedStop: s.stop != null ? String(s.stop) : "",
+              reason: "Вход по сигналу",
+              note: "",
+              signalId: s.id,
+            })
+          }
+        >
+          Записать эту сделку
+        </button>
       )}
       {!ai.result && (
         <button className="btn small" style={{ marginTop: 8, marginLeft: buy && s.stop != null && !risk ? 6 : 0 }} disabled={ai.busy} onClick={() => explain()}>

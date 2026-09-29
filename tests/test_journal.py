@@ -65,6 +65,27 @@ def test_cannot_delete_buy_that_backs_a_sell(env: Env) -> None:
     assert j.remove(9999) is False
 
 
+def test_journal_keeps_plan_and_exports_csv(env: Env) -> None:
+    client = TestClient(create_app(env.services))
+    body = {
+        "market": "moex",
+        "symbol": "SBER",
+        "side": "buy",
+        "qty": 10,
+        "price": 250,
+        "ts": 1_700_000_000_000,
+        "reason": "пробой",
+        "planned_stop": 240,
+        "signal_id": None,
+    }
+    saved = client.post("/api/journal", json=body)
+    assert saved.status_code == 201
+    assert saved.json()["reason"] == "пробой" and saved.json()["planned_stop"] == 240
+    csv_body = client.get("/api/journal.csv").text
+    assert "пробой" in csv_body and "SBER" in csv_body
+    assert client.post("/api/journal", json={**body, "planned_stop": 0, "ts": 2}).status_code == 422
+
+
 def test_api_journal_flow(env: Env) -> None:
     client = TestClient(create_app(env.services))
     body = {"market": "moex", "symbol": "SBER", "side": "buy", "qty": 10, "price": 250, "ts": 1_700_000_000_000}

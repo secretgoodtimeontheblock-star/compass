@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -13,6 +12,7 @@ from dataclasses import dataclass, field
 from compass.ai.audit import unverified_numbers
 from compass.ai.prompts import Prompt
 from compass.ai.providers import AiError, AiNotReady, ModelInfo, Provider
+from compass.db import Connection
 from compass.settings import Settings
 
 log = logging.getLogger("compass.ai")
@@ -34,7 +34,7 @@ class AiService:
         self,
         providers: dict[str, Provider],
         settings: Settings,
-        conn: sqlite3.Connection,
+        conn: Connection,
         max_parallel: int = 2,
         slot_wait_s: float = 2.0,
     ) -> None:
@@ -42,7 +42,7 @@ class AiService:
         self._providers = providers
         self._settings = settings
         self._conn = conn
-        self._db_lock = threading.Lock()
+        self._db_lock = conn.lock
         # AI-запрос — это процесс CLI или сетевой вызов на десятки секунд; лавину не запускаем
         self._slots = threading.BoundedSemaphore(max_parallel)
 
@@ -115,13 +115,14 @@ class AiService:
 
     @staticmethod
     def _warnings(prompt: Prompt, text: str) -> list[str]:
+        warnings = list(prompt.data_warnings)
         if not prompt.audit:
-            return []
+            return warnings
         bad = unverified_numbers(text, prompt.facts)
         if not bad:
-            return []
+            return warnings
         shown = ", ".join(bad[:8])
-        return [f"В ответе есть числа, которых нет в данных приложения: {shown}. Проверьте их сами: модель могла ошибиться."]
+        return warnings + [f"В ответе есть числа, которых нет в данных приложения: {shown}. Проверьте их сами: модель могла ошибиться."]
 
     # ---------- кэш ----------
 

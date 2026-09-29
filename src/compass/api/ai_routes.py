@@ -79,8 +79,11 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
         params = strat.resolve()
         cfg = svc.settings.all()
         snapshot = metrics = None
+        warning = None
         try:  # без свежих данных объяснение остаётся, просто беднее
-            candles = svc.cache.get(sig.market, sig.symbol, sig.tf, 1000).candles
+            result = svc.cache.get(sig.market, sig.symbol, sig.tf, 1000)
+            candles = result.candles
+            warning = prompts.STALE_WARNING if result.stale else None
             snapshot = prompts.snapshot_facts(candles[-300:], sig.tf, sig.market)
             if len(candles) >= 30:
                 df = candles_to_df(candles)
@@ -88,9 +91,9 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
                     df, strat.target(df, params), 100_000.0, FEE_PCT.get(sig.market, 0.1), SLIPPAGE_PCT
                 ).metrics
         except (MarketError, ValueError):
-            pass
+            warning = prompts.UNAVAILABLE_WARNING
         prompt = prompts.explain_signal(sig, strat, params, snapshot, metrics, cfg["capital"], cfg["risk_pct"])
-        return _dto(svc.ai.run(prompt, req.refresh))
+        return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))
 
     @app.post("/api/ai/review-journal")
     def review_journal(req: ReviewRequest) -> dict:
@@ -102,6 +105,7 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
     @app.post("/api/ai/ask")
     def ask(req: AskRequest) -> dict:
         snapshot = None
+        warning = None
         if req.market and req.symbol:
             adapter = svc.adapters.get(req.market)
             if adapter is None:
@@ -109,8 +113,11 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
             cfg = svc.settings.all()
             tf = req.tf or cfg.get(f"tf_{req.market}", "1d")
             try:
-                candles = svc.cache.get(req.market, req.symbol, tf, 300).candles
-                snapshot = prompts.snapshot_facts(candles, tf, req.market)
+                result = svc.cache.get(req.market, req.symbol, tf, 300)
+                snapshot = prompts.snapshot_facts(result.candles, tf, req.market)
+                warning = prompts.STALE_WARNING if result.stale else None
             except MarketError:
                 snapshot = None  # ответим общим объяснением, без привязки к инструменту
-        return _dto(svc.ai.run(prompts.teach(req.question.strip(), snapshot, req.symbol), req.refresh))
+                warning = prompts.UNAVAILABLE_WARNING
+        prompt = prompts.teach(req.question.strip(), snapshot, req.symbol)
+        return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))

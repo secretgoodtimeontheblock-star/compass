@@ -258,10 +258,9 @@ class ClaudeProvider:
         return list(CLAUDE_MODELS)
 
     def ask(self, system: str, prompt: str, model: str) -> str:
-        import anthropic
-
         model = check_model_id(model or self.default_model)
         client = self._client()
+        import anthropic
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": self._max_tokens,

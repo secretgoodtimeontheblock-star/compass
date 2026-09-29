@@ -89,11 +89,48 @@ button {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   padding: 0 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+
+/* Источник данных и необязательная подсказка сохраняют язык существующего интерфейса. */
+.data-status {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.data-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+.source-label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.source-label.live { color: var(--up); }
+.source-label.delayed { color: var(--warn); }
+.source-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.data-detail { margin-top: 4px; color: var(--muted); }
+.getting-started {
+  padding: 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow: auto;
+  max-height: 45vh;
+  flex-shrink: 0;
+}
+.getting-started-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.getting-started h2 { font-size: 16px; margin: 0; }
+.getting-started p { max-width: 72ch; margin: 8px 0; color: var(--muted); }
+.getting-started ol { padding-left: 20px; margin: 12px 0; }
+.getting-started li { margin-bottom: 6px; }
+.getting-started-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.getting-started details { margin-top: 12px; }
+.getting-started summary { cursor: pointer; color: var(--muted); }
+.getting-started button { min-height: 36px; }
+
 
 .brand {
   display: flex;
@@ -676,3 +713,23 @@ th.r {
     animation: none;
   }
 }
+
+@media (max-width: 1050px) {
+  .brand { display: none; }
+  .topbar .search { width: 170px; flex: 1; min-width: 100px; }
+  .topbar { gap: 4px; padding: 0 8px; }
+  .topbar .btn, .topbar .seg button { padding-left: 8px; padding-right: 8px; }
+}
+
+@media (max-width: 700px) {
+  .app { grid-template-rows: auto minmax(0, 1fr) auto; }
+  .topbar { flex-wrap: wrap; padding: 8px; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .side { display: none; }
+  .right.open { top: 100px; bottom: 40px; }
+  .footer { padding: 6px 10px; }
+  .footer > span:last-child { display: none; }
+  .getting-started { max-height: 38vh; }
+  .getting-started button, .topbar button { min-height: 44px; }
+}
+

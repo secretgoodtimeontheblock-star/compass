@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import logging
 import math
-import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from compass.cache import CandleCache
+from compass.db import Connection
 from compass.indicators import atr
 from compass.markets.base import MarketError
 from compass.models import TIMEFRAME_MS
-from compass.settings import Settings
+from compass.settings import Settings, profile_key
 from compass.strategies import STRATEGIES, candles_to_df
 from compass.watchlist import Watchlist
 
@@ -52,9 +52,9 @@ class ScanResult:
 
 
 class SignalStore:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Connection) -> None:
         self._conn = conn
-        self._lock = threading.Lock()
+        self._lock = conn.lock
 
     def insert(self, s: Signal) -> bool:
         """True — сигнал новый; False — такой уже был."""
@@ -132,10 +132,17 @@ class SignalEngine:
             if tf is None:
                 continue
             try:
-                candles = self._cache.get(inst.market, inst.symbol, tf, HISTORY).candles
+                result = self._cache.get(inst.market, inst.symbol, tf, HISTORY)
             except MarketError as e:
                 errors.append(f"{inst.symbol}: {e}")
                 continue
+            if result.stale:
+                errors.append(
+                    f"{inst.symbol}: источник недоступен, свечи из кэша; "
+                    "поиск новых сигналов приостановлен до обновления данных"
+                )
+                continue
+            candles = result.candles
             # свеча закрыта, только если её окно целиком в прошлом
             cutoff = self._now_ms() - TIMEFRAME_MS[tf]
             closed = [c for c in candles if c.ts <= cutoff]
@@ -143,8 +150,13 @@ class SignalEngine:
                 continue
             df = candles_to_df(closed)
             last_atr = atr(df, 14).iloc[-1]
-            for strat in STRATEGIES.values():
-                target = strat.target(df, strat.resolve())
+            try:
+                chosen = _chosen_strategies(cfg["instrument_strategies"], inst.market, inst.symbol)
+            except ValueError as e:
+                errors.append(f"{inst.symbol}: {e}")
+                continue
+            for strat, params in chosen:
+                target = strat.target(df, params)
                 prev, cur = int(target.iloc[-2]), int(target.iloc[-1])
                 if prev == cur:
                     continue
@@ -160,3 +172,12 @@ class SignalEngine:
                     new.append(sig)
                     self._notifier.send(sig)
         return ScanResult(new, errors)
+
+
+def _chosen_strategies(profiles: dict, market: str, symbol: str) -> list[tuple]:
+    """Сохранённая связка инструмента или все стратегии с параметрами по умолчанию."""
+    raw = profiles.get(profile_key(market, symbol))
+    if not raw:
+        return [(s, s.resolve()) for s in STRATEGIES.values()]
+    strat = STRATEGIES[raw["strategy"]]
+    return [(strat, strat.resolve({k: int(v) for k, v in raw["params"].items()}))]

@@ -87,6 +87,25 @@ def test_too_short_history_is_skipped_quietly(env: Env) -> None:
     assert res.new == [] and res.errors == []
 
 
+def test_stale_cache_does_not_create_signals_and_recovers(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    env.services.cache.get("moex", "XYZ", "1d", 300)
+    env.adapter.data["XYZ"] = MarketError("down")
+    client = TestClient(create_app(env.services))
+    result = client.post("/api/scan").json()
+    assert result["new"] == []
+    assert "XYZ" in result["errors"][0] and "приостановлен" in result["errors"][0]
+    assert env.services.signals.list() == [] and env.notifier.sent == []
+    assert client.get("/api/candles", params={"market": "moex", "symbol": "XYZ"}).json()["stale"]
+
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    assert donchian(env.services.engine.scan().new)
+    assert env.notifier.sent
+    assert env.services.engine.scan().new == []
+
+
 # --- уведомления ---
 
 
@@ -123,6 +142,20 @@ def test_telegram_failure_is_swallowed_and_token_not_logged(caplog) -> None:
 
 
 # --- настройки и API ---
+
+
+def test_saved_strategy_replaces_the_default_scan(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    env.services.settings.update(
+        {"instrument_strategies": {"moex|XYZ": {"strategy": "rsi_reversion", "params": {}}}}
+    )
+    res = env.services.engine.scan()
+    assert donchian(res.new) == []
+    assert {s.strategy for s in res.new} <= {"rsi_reversion"}
+    with pytest.raises(ValueError):
+        env.services.settings.update({"instrument_strategies": {"bad": {"strategy": "donchian"}}})
 
 
 def test_settings_defaults_update_and_validation(env: Env) -> None:

@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 _V1 = """
 CREATE TABLE candles (
@@ -71,16 +72,72 @@ CREATE TABLE ai_cache (
 CREATE INDEX ai_cache_created ON ai_cache (created_at DESC);
 """
 
+# Старую криптоисторию нельзя приписать текущей бирже: настройка могла меняться.
+# Сохраняем её отдельно; при первом обращении новый источник загрузит свой ряд.
+_V5 = """
+ALTER TABLE candles RENAME TO candles_v4;
+CREATE TABLE candles (
+  source TEXT NOT NULL, market TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+  ts INTEGER NOT NULL, open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL,
+  close REAL NOT NULL, volume REAL NOT NULL,
+  PRIMARY KEY (source, market, symbol, tf, ts)
+) WITHOUT ROWID;
+INSERT INTO candles
+SELECT CASE WHEN market='moex' THEN 'moex:iss' ELSE 'legacy:' || market END,
+       market, symbol, tf, ts, open, high, low, close, volume FROM candles_v4;
+DROP TABLE candles_v4;
+ALTER TABLE fetch_log RENAME TO fetch_log_v4;
+CREATE TABLE fetch_log (
+  source TEXT NOT NULL, market TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  PRIMARY KEY (source, market, symbol, tf)
+);
+INSERT INTO fetch_log
+SELECT CASE WHEN market='moex' THEN 'moex:iss' ELSE 'legacy:' || market END,
+       market, symbol, tf, fetched_at FROM fetch_log_v4;
+DROP TABLE fetch_log_v4;
+"""
 
-def connect(path: Path | str) -> sqlite3.Connection:
+# Причина входа и плановый стоп — чтобы сравнить замысел со сделкой, которую записал пользователь.
+_V6 = """
+ALTER TABLE journal ADD COLUMN planned_stop REAL;
+ALTER TABLE journal ADD COLUMN reason TEXT NOT NULL DEFAULT '';
+"""
+
+
+class Connection(sqlite3.Connection):
+    """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
+
+    Держать lock нужно на протяжении всей операции с БД, а не отдельного execute.
+    Сетевые вызовы выполняются за пределами блокировки.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.lock = threading.RLock()
+
+
+def connect(path: Path | str) -> Connection:
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    # FastAPI гоняет sync-эндпоинты по пулу потоков — одно соединение на всех
-    # безопасно только вместе с блокировкой в Cache (см. cache.py).
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    # FastAPI и сканер работают в разных потоках; сервисы используют conn.lock.
+    conn = sqlite3.connect(str(path), check_same_thread=False, factory=Connection)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    _migrate(conn)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if 0 < version < SCHEMA_VERSION and str(path) != ":memory:":
+            backup = Path(str(path) + f".v{version}.bak")
+            if not backup.exists():
+                saved = sqlite3.connect(str(backup))
+                try:
+                    conn.backup(saved)
+                finally:
+                    saved.close()
+        _migrate(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -106,4 +163,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 4:
         conn.executescript(_V4)
         conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+    if version < 5:
+        conn.executescript("BEGIN IMMEDIATE;\n" + _V5 + "\nPRAGMA user_version = 5;\nCOMMIT;")
+    if version < 6:
+        conn.executescript(_V6)
+        conn.execute("PRAGMA user_version = 6")
         conn.commit()

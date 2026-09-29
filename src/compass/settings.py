@@ -6,12 +6,12 @@ from __future__ import annotations
 import copy
 import json
 import math
-import sqlite3
-import threading
 from collections.abc import Callable
 from typing import Any
 
 from compass.ai.providers import MODEL_ID_RE
+from compass.db import Connection
+from compass.strategies import STRATEGIES
 
 AI_PROVIDERS = ("off", "cursor", "claude", "ollama")
 
@@ -25,15 +25,18 @@ DEFAULTS: dict[str, Any] = {
     "ai_models": {},  # провайдер → выбранная модель; пусто — модель по умолчанию у провайдера
     # провайдер, которому пользователь разрешил отправку данных (для облачных обязательно)
     "ai_consent": "",
+    # «рынок|тикер» → стратегия и параметры, которыми и сканер, и бэктест пользуются для этого инструмента.
+    # Пусто — сканер проверяет все стратегии с параметрами по умолчанию.
+    "instrument_strategies": {},
 }
 
 
 class Settings:
-    def __init__(self, conn: sqlite3.Connection, timeframes: dict[str, tuple[str, ...]]) -> None:
+    def __init__(self, conn: Connection, timeframes: dict[str, tuple[str, ...]]) -> None:
         """timeframes: рынок → допустимые таймфреймы (для валидации tf_*)."""
         self._conn = conn
         self._tfs = timeframes
-        self._lock = threading.Lock()
+        self._lock = conn.lock
 
     def all(self) -> dict[str, Any]:
         with self._lock:
@@ -66,6 +69,7 @@ class Settings:
             "ai_provider": lambda v: _choice(v, "Провайдер AI", AI_PROVIDERS),
             "ai_models": _ai_models,
             "ai_consent": lambda v: v if v == "" else _choice(v, "Согласие AI", AI_PROVIDERS[1:]),
+            "instrument_strategies": _instrument_strategies,
         }
         return checks[key](value)
 
@@ -102,6 +106,33 @@ def _ai_models(v: Any) -> dict[str, str]:
             raise ValueError(f"Недопустимое имя модели для {provider}")
         if model:
             out[provider] = model
+    return out
+
+
+def profile_key(market: str, symbol: str) -> str:
+    return f"{market}|{symbol}"
+
+
+def _instrument_strategies(v: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(v, dict):
+        raise ValueError("Настройки стратегий: нужен объект «рынок|тикер» → стратегия")  # noqa: TRY004
+    out: dict[str, dict[str, Any]] = {}
+    for key, item in v.items():
+        if not isinstance(key, str) or key.count("|") != 1:
+            raise ValueError("Ключ стратегии — «рынок|тикер»")
+        market, symbol = key.split("|", 1)
+        if not market or not symbol:
+            raise ValueError("Ключ стратегии — «рынок|тикер»")
+        if not isinstance(item, dict) or set(item) - {"strategy", "params"}:
+            raise ValueError(f"{symbol}: укажите стратегию и параметры")
+        sid = item.get("strategy")
+        strat = STRATEGIES.get(sid) if isinstance(sid, str) else None
+        if strat is None:
+            raise ValueError(f"Неизвестная стратегия: {sid}")
+        params = item.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"{symbol}: параметры стратегии — объект")  # noqa: TRY004
+        out[key] = {"strategy": strat.id, "params": strat.resolve(params)}
     return out
 
 

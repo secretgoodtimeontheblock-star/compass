@@ -500,6 +500,47 @@ def test_api_ai_errors_and_validation(env: Env) -> None:
     assert ok.status_code == 200 and ok.json()["warnings"] == []  # без данных сверять нечего
 
 
+@pytest.mark.parametrize("endpoint", ["ask", "explain-signal"])
+def test_ai_warns_about_stale_data_in_prompt_response_and_cache(env: Env, endpoint: str) -> None:
+    from compass.markets import MarketError
+
+    env.adapter.data["SBER"] = day_candles([100.0 + i for i in range(60)])
+    env.services.signals.insert(sample_signal())
+    sig = env.services.signals.list()[0]
+    client = TestClient(create_app(env.services))
+    use(env, "ollama")
+    request = {"signal_id": sig.id} if endpoint == "explain-signal" else {
+        "question": "Что показывает RSI?", "market": "moex", "symbol": "SBER",
+    }
+    url = f"/api/ai/{endpoint}"
+    fresh = client.post(url, json=request)
+    assert fresh.status_code == 200 and fresh.json()["warnings"] == []
+    env.adapter.data["SBER"] = MarketError("down")
+    stale = client.post(url, json=request)
+    assert stale.status_code == 200
+    assert prompts.STALE_WARNING in stale.json()["warnings"]
+    assert stale.json()["cached"] is False  # свежий ответ не используется для старых данных
+    assert prompts.STALE_WARNING in env.local.calls[-1][1]
+    cached = client.post(url, json=request).json()
+    assert cached["cached"] and prompts.STALE_WARNING in cached["warnings"]
+    env.adapter.data["SBER"] = day_candles([100.0 + i for i in range(60)])
+    assert client.post(url, json=request).json()["warnings"] == []
+
+
+def test_ai_without_market_data_returns_explicit_warning(env: Env) -> None:
+    from compass.markets import MarketError
+
+    use(env, "ollama")
+    env.adapter.data["SBER"] = MarketError("down")
+    client = TestClient(create_app(env.services))
+    response = client.post("/api/ai/ask", json={
+        "question": "Что показывает RSI?", "market": "moex", "symbol": "SBER",
+    })
+    assert response.status_code == 200
+    assert prompts.UNAVAILABLE_WARNING in response.json()["warnings"]
+    assert prompts.UNAVAILABLE_WARNING in env.local.calls[-1][1]
+
+
 def test_api_ask_with_context_and_journal_review(env: Env) -> None:
     env.adapter.data["SBER"] = day_candles([100.0 + i * 0.5 for i in range(80)])
     client = TestClient(create_app(env.services))

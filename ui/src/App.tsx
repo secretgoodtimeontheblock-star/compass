@@ -3,6 +3,8 @@ import { api } from "./api";
 import { AiPanel } from "./components/AiPanel";
 import { BacktestPanel } from "./components/BacktestPanel";
 import { ConsentDialog } from "./components/ConsentDialog";
+import { DataStatus } from "./components/DataStatus";
+import { GettingStarted } from "./components/GettingStarted";
 import { JournalPanel } from "./components/JournalPanel";
 import { type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
@@ -12,7 +14,10 @@ import { Watchlist } from "./components/Watchlist";
 import { AiContext } from "./lib/ai-context";
 import { fmtPct, fmtPrice, pnlClass } from "./lib/format";
 import { loadPref, savePref, useApi } from "./lib/use-api";
-import type { AiStatus, Instrument, MarketId, Settings, Signal } from "./types";
+import { useLiveCandles } from "./lib/use-live-candles";
+import { hasGap, mergeLiveHistory } from "./lib/live-candles";
+import { TF_MS } from "./lib/indicators";
+import type { AiStatus, Instrument, JournalDraft, MarketId, Settings, Signal } from "./types";
 
 type Tab = "signals" | "backtest" | "journal" | "ai";
 type Toast = { id: number; title: string; text: string };
@@ -29,6 +34,7 @@ function readJson<T>(key: string, fallback: T): T {
 }
 
 export default function App() {
+  const [journalDraft, setJournalDraft] = useState<JournalDraft | null>(null);
   const [theme, setTheme] = useState(loadPref("theme") === "light" ? "light" : "dark");
   const [market, setMarket] = useState<MarketId>(loadPref("market") === "crypto" ? "crypto" : "moex");
   const [selSymbol, setSelSymbol] = useState<Record<string, string>>(() => readJson("selected", {}));
@@ -39,6 +45,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("signals");
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(loadPref("guide-dismissed") !== "yes");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [scanBusy, setScanBusy] = useState(false);
   const [settingsOverride, setSettingsOverride] = useState<Settings>();
@@ -99,7 +106,13 @@ export default function App() {
     [selected?.market, selected?.symbol, tf],
     60_000,
   );
-  const candles = candlesApi.data?.candles ?? [];
+  const live = useLiveCandles(selected?.symbol, tf, market === "crypto" && !!marketInfo?.live_supported);
+  // Обычный REST-опрос тоже может восстановить историю, пока поток остаётся подключён.
+  const streamedHistory = live.feed?.history;
+  const history = streamedHistory && (!candlesApi.data || (streamedHistory.fetched_at ?? 0) > (candlesApi.data.fetched_at ?? 0))
+    ? streamedHistory : candlesApi.data;
+  const candles = useMemo(() => mergeLiveHistory(history, live.feed?.updates ?? []), [history, live.feed?.updates]);
+  const gap = market === "crypto" && hasGap(candles, TF_MS[tf]);
 
   const journalApi = useApi(
     selected ? () => api.journal({ market: selected.market, symbol: selected.symbol }) : null,
@@ -214,6 +227,7 @@ export default function App() {
         </div>
         <SearchBox market={market} onPick={addToWatch} />
         <div className="spacer" />
+        <button className="btn" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>С чего начать</button>
         <button className="btn primary" onClick={scan} disabled={scanBusy || items.length === 0 && (watchApi.data ?? []).length === 0}>
           {scanBusy ? "Проверяем…" : "Проверить сигналы"}
         </button>
@@ -241,6 +255,19 @@ export default function App() {
         </aside>
 
         <main className="center">
+          {guideOpen && (
+            <GettingStarted
+              selected={selected}
+              onPick={async (i) => {
+                await api.addWatch(i);
+                watchApi.reload();
+                selectInstrument(i);
+              }}
+              onBacktest={() => { setTab("backtest"); setRightOpen(true); }}
+              onLearn={() => { setTab("ai"); setRightOpen(true); }}
+              onClose={() => { setGuideOpen(false); savePref("guide-dismissed", "yes"); }}
+            />
+          )}
           <div className="chart-head">
             {selected ? (
               <>
@@ -280,9 +307,12 @@ export default function App() {
               ))}
             </div>
           </div>
-          {candlesApi.data?.stale && (
-            <div className="notice">Источник данных сейчас недоступен — показаны сохранённые свечи.</div>
-          )}
+          <DataStatus
+            market={marketInfo} state={live.feed?.state} message={live.feed?.message}
+            receivedAt={live.feed?.receivedAt} fetchedAt={history?.fetched_at}
+            stale={!!history?.stale} hasData={candles.length > 0} gap={gap}
+            onRetry={() => { live.retry(); candlesApi.reload(); }}
+          />
           <div className="chart-wrap">
             {candlesApi.loading && <div className="loading-bar" />}
             {selected ? (
@@ -303,7 +333,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {candlesApi.error && selected && (
+            {candlesApi.error && selected && candles.length === 0 && (
               <div className="chart-empty" style={{ background: "color-mix(in srgb, var(--bg) 85%, transparent)" }}>
                 <div>
                   <b className="down">Не удалось загрузить свечи</b>
@@ -345,6 +375,12 @@ export default function App() {
               unseenCount={unseen.length}
               onSelect={selectInstrument}
               onMarkSeen={markSeen}
+              onRecord={(draft) => {
+                selectInstrument({ market: draft.market, symbol: draft.symbol, name: draft.symbol });
+                setJournalDraft(draft);
+                setTab("journal");
+                setRightOpen(true);
+              }}
             />
           )}
           {tab === "backtest" && (
@@ -354,6 +390,7 @@ export default function App() {
               strategies={strategiesApi.data ?? []}
               settings={settings}
               theme={theme}
+              onStrategiesSaved={() => settingsApi.reload()}
             />
           )}
           {tab === "journal" && (
@@ -367,6 +404,14 @@ export default function App() {
                 positionsApi.reload();
               }}
               onSelect={selectInstrument}
+              draft={
+                journalDraft &&
+                selected &&
+                journalDraft.market === selected.market &&
+                journalDraft.symbol === selected.symbol
+                  ? journalDraft
+                  : null
+              }
             />
           )}
           {tab === "ai" && <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />}

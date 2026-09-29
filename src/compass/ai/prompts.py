@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 
 from compass.indicators import atr, rsi, sma
@@ -33,6 +33,23 @@ class Prompt:
     user: str
     facts: str  # то, с чем сверяются числа в ответе
     audit: bool = True  # False — свободный вопрос без опорных данных, сверять не с чем
+    data_warnings: tuple[str, ...] = ()
+
+
+STALE_WARNING = "Источник недоступен: использованы сохранённые свечи. Актуальность цен не подтверждена."
+UNAVAILABLE_WARNING = "Рыночные данные недоступны. Ответ не описывает текущую ситуацию на рынке."
+
+
+def with_data_warning(prompt: Prompt, warning: str | None) -> Prompt:
+    if warning is None:
+        return prompt
+    return replace(
+        prompt,
+        system=prompt.system + "\nПредупреди об ограничении данных: " + warning
+        + " Не представляй сохранённые цены как актуальные.",
+        user="СОСТОЯНИЕ ДАННЫХ: " + warning + "\n\n" + prompt.user,
+        data_warnings=(*prompt.data_warnings, warning),
+    )
 
 
 def _g(x: float | None) -> str:
@@ -140,9 +157,11 @@ def journal_review(entries: list[Entry], positions: list[Position], symbol: str 
     lines = []
     for e in sorted(entries, key=lambda x: x.ts)[-60:]:  # последние 60 записей: длинный журнал не влезет в запрос
         note = f" <заметка>{_clean_note(e.note)}</заметка>" if e.note else ""
+        reason = f" <причина>{_clean_note(e.reason)}</причина>" if e.reason else ""
+        stop = f", плановый стоп {_g(e.planned_stop)}" if e.planned_stop is not None else ""
         lines.append(
             f"{_iso(e.ts, e.market)} {e.symbol} {'покупка' if e.side == 'buy' else 'продажа'} "
-            f"{_g(e.qty)} × {_g(e.price)}, комиссия {_g(e.fee)}{note}"
+            f"{_g(e.qty)} × {_g(e.price)}, комиссия {_g(e.fee)}{stop}{reason}{note}"
         )
     pos = [
         f"{p.symbol}: позиция {_g(p.qty)}, средняя цена {_g(p.avg_price)}, зафиксированный результат {_g(p.realized_pnl)}, "
