@@ -15,6 +15,7 @@ from compass.ai.providers import AiError, AiNotReady
 from compass.ai.service import AiResult
 from compass.backtest import backtest
 from compass.markets.base import MarketError
+from compass.models import closed_candles
 from compass.strategies import STRATEGIES, candles_to_df
 
 if TYPE_CHECKING:
@@ -82,7 +83,7 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
         warning = None
         try:  # без свежих данных объяснение остаётся, просто беднее
             result = svc.cache.get(sig.market, sig.symbol, sig.tf, 1000)
-            candles = result.candles
+            candles = closed_candles(result.candles, sig.tf, svc.now_ms())
             warning = prompts.STALE_WARNING if result.stale else None
             snapshot = prompts.snapshot_facts(candles[-300:], sig.tf, sig.market)
             if len(candles) >= 30:

@@ -22,6 +22,8 @@ ENGINE_VERSION = "2"  # менять при любом изменении пра
 _MS_PER_YEAR = 365.25 * 86_400_000
 _MIN_YEARS_FOR_RATIOS = 60 / 365.25  # на коротком периоде годовые коэффициенты вводят в заблуждение
 _MIN_TRADES_MC = 5
+MIN_TRADES_FOR_STATS = 10  # меньше — доля прибыльных и коэффициенты почти ничего не говорят
+_SAMPLE_DEPENDENT = ("win_rate_pct", "avg_trade_pct", "profit_factor", "payoff_ratio", "sharpe", "sortino", "calmar", "cagr_pct")
 _MIN_BARS_PER_WINDOW = 20
 
 
@@ -201,3 +203,19 @@ def run_card(
             "безрисковая ставка 0 в Sharpe/Sortino",
         ],
     }
+
+
+def apply_sample_rules(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Скрывает показатели, по которым при малом числе сделок нельзя делать выводы.
+
+    Доходность, просадка и «купил и держи» остаются: это факты о прошедшем периоде.
+    Скрытое заменяется на None, а причина возвращается текстом для пользователя."""
+    trades = int(metrics.get("trades") or 0)
+    if trades >= MIN_TRADES_FOR_STATS:
+        return metrics, []
+    out = {k: (None if k in _SAMPLE_DEPENDENT else v) for k, v in metrics.items()}
+    note = (
+        f"Закрытых сделок: {trades}. Меньше {MIN_TRADES_FOR_STATS} — доля прибыльных, профит-фактор, "
+        "Sharpe, Sortino и Calmar не показываются: при такой выборке они случайны."
+    )
+    return out, [note]

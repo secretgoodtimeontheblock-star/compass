@@ -81,3 +81,16 @@ def test_run_card_hash_changes_with_data() -> None:
     df2 = df.copy()
     df2.loc[10, "close"] += 1
     assert data_fingerprint(df2) != card["data_hash"]
+
+
+def test_sample_rules_hide_small_sample_stats_but_keep_facts() -> None:
+    from compass.validation import MIN_TRADES_FOR_STATS, apply_sample_rules
+
+    m = {"trades": 3, "win_rate_pct": 100.0, "sharpe": 2.5, "profit_factor": None, "total_return_pct": 8.0,
+         "max_drawdown_pct": -4.0}
+    out, warn = apply_sample_rules(m)
+    assert out["win_rate_pct"] is None and out["sharpe"] is None
+    assert out["total_return_pct"] == 8.0 and out["max_drawdown_pct"] == -4.0
+    assert warn and "3" in warn[0]
+    enough = {**m, "trades": MIN_TRADES_FOR_STATS}
+    assert apply_sample_rules(enough) == (enough, [])

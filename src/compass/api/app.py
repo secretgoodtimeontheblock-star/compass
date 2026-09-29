@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,13 +25,20 @@ from compass.cache import CandleCache
 from compass.journal import Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
-from compass.models import Instrument
+from compass.models import Instrument, closed_candles
 from compass.risk import position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
 from compass.strategies import STRATEGIES, candles_to_df
-from compass.validation import risk_ratios, run_card, trade_resampling, trade_stats, walk_forward
+from compass.validation import (
+    apply_sample_rules,
+    risk_ratios,
+    run_card,
+    trade_resampling,
+    trade_stats,
+    walk_forward,
+)
 from compass.watchlist import Watchlist
 
 CRYPTO_QTY_STEP = 1e-6
@@ -58,6 +66,7 @@ class Services:
     ai: AiService
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
     live: OkxLive | None = None
+    now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
 class JournalRequest(BaseModel):
@@ -222,22 +231,30 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             raise HTTPException(404, f"Неизвестная стратегия: {req.strategy}")
         params = strat.resolve(req.params)
         res = svc.cache.get(req.market, req.symbol, req.tf, req.limit)
-        if len(res.candles) < 30:
-            raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 свечей)")
-        df = candles_to_df(res.candles)
+        # незакрытая свеча ещё меняется: бэктест по ней показал бы результат, которого не было
+        candles = closed_candles(res.candles, req.tf, svc.now_ms())
+        open_dropped = len(candles) < len(res.candles)
+        if len(candles) < 30:
+            raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 закрытых свечей)")
+        df = candles_to_df(candles)
         bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct)
         ts = df["ts"].to_numpy()
         eq = np.array([v for _, v in bt.equity])
-        metrics = {
-            **bt.metrics,
-            **risk_ratios(eq, ts, req.capital, bt.metrics["max_drawdown_pct"]),
-            **trade_stats(bt.trades),
-        }
+        metrics, warnings = apply_sample_rules(
+            {
+                **bt.metrics,
+                **risk_ratios(eq, ts, req.capital, bt.metrics["max_drawdown_pct"]),
+                **trade_stats(bt.trades),
+            }
+        )
+        if open_dropped:
+            warnings.append("Последняя свеча ещё не закрыта и в расчёт не входит.")
         return {
             "strategy": strat.id,
             "params": params,
             "stale": res.stale,
             "metrics": metrics,
+            "warnings": warnings,
             "validation": {
                 "walk_forward": walk_forward(df, bt, req.capital),
                 "resampling": trade_resampling(bt.trades),

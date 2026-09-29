@@ -19,7 +19,7 @@ from compass.cache import CandleCache
 from compass.db import Connection
 from compass.indicators import atr
 from compass.markets.base import MarketError
-from compass.models import TIMEFRAME_MS
+from compass.models import closed_candles
 from compass.settings import Settings, profile_key
 from compass.strategies import STRATEGIES, candles_to_df
 from compass.watchlist import Watchlist
@@ -142,10 +142,7 @@ class SignalEngine:
                     "поиск новых сигналов приостановлен до обновления данных"
                 )
                 continue
-            candles = result.candles
-            # свеча закрыта, только если её окно целиком в прошлом
-            cutoff = self._now_ms() - TIMEFRAME_MS[tf]
-            closed = [c for c in candles if c.ts <= cutoff]
+            closed = closed_candles(result.candles, tf, self._now_ms())
             if len(closed) < 3:
                 continue
             df = candles_to_df(closed)

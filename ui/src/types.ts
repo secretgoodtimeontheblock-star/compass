@@ -137,6 +137,7 @@ export interface BacktestResponse {
   params: Record<string, number>;
   stale: boolean;
   metrics: BacktestMetrics;
+  warnings: string[];
   validation: { walk_forward: WalkForward | null; resampling: Resampling | null };
   run_card: RunCard;
   trades: Trade[];

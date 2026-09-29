@@ -211,3 +211,19 @@ def test_api_scan_and_seen_flow(env: Env) -> None:
     assert client.post("/api/signals/seen").json()["marked"] >= 1
     assert client.get("/api/signals", params={"unseen": True}).json() == []
     assert len(client.get("/api/signals").json()) >= 1  # история осталась
+
+
+def test_backtest_excludes_unclosed_candle_and_says_so(env: Env) -> None:
+    closes = [100 + (i % 7) for i in range(60)]
+    env.adapter.data["SBER"] = day_candles(closes)
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    body = {"market": "moex", "symbol": "SBER", "strategy": "sma_cross", "limit": 100}
+    env.now[0] = 60 * DAY  # последняя свеча (i=59) закрывается ровно в 60·DAY
+    done = client.post("/api/backtest", json=body).json()
+    assert done["run_card"]["candles"] == 60
+    assert all("не закрыта" not in w for w in done["warnings"])
+    env.now[0] = 60 * DAY - 1  # день ещё не кончился
+    partial = client.post("/api/backtest", json=body).json()
+    assert partial["run_card"]["candles"] == 59
+    assert any("не закрыта" in w for w in partial["warnings"])
+    assert partial["run_card"]["end_ts"] == 58 * DAY

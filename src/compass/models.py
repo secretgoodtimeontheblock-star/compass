@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -33,3 +34,13 @@ TIMEFRAME_MS: dict[str, int] = {
     "4h": 14_400_000,
     "1d": 86_400_000,
 }
+
+
+def closed_candles(candles: Sequence[Candle], tf: str, now_ms: int) -> list[Candle]:
+    """Только завершённые свечи: окно свечи целиком в прошлом.
+
+    По незакрытой свече цена и объём ещё меняются, поэтому сигналы, бэктест и AI
+    считают только по закрытым. Для МосБиржи это консервативно: дневная свеча
+    считается закрытой по окончании календарных суток по Москве."""
+    cutoff = now_ms - TIMEFRAME_MS[tf]
+    return [c for c in candles if c.ts <= cutoff]

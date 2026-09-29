@@ -111,7 +111,9 @@ def env() -> Env:
     engine = SignalEngine(cache, watchlist, settings, store, notifier, now_ms=lambda: now[0])
     cloud, local = FakeProvider("cursor", cloud=True), FakeProvider("ollama", cloud=False)
     ai = AiService({"cursor": cloud, "ollama": local}, settings, conn, slot_wait_s=0.05)
-    svc = Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai)
+    svc = Services(
+        adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0]
+    )
     return Env(svc, adapter, notifier, now, cloud, local)
 
 

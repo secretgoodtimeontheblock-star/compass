@@ -202,6 +202,10 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
       {error && <div className="error">{error}</div>}
       {res?.stale && <div className="notice">Источник данных недоступен — расчёт по сохранённым данным.</div>}
 
+      {res?.warnings.map((w) => (
+        <div key={w} className="notice">{w}</div>
+      ))}
+
       {m && (
         <>
           <div className="metrics num">
