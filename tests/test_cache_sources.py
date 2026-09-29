@@ -94,3 +94,37 @@ def test_v6_upgrade_adds_signal_params_keeping_old_rows_and_backup(tmp_path):
         assert backup.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 1
     finally:
         backup.close()
+
+
+def test_v7_upgrade_marks_old_journal_rows_real_with_unique_uid_and_backup(tmp_path):
+    path = tmp_path / "compass.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(db._V1 + db._V2 + db._V3 + db._V4 + db._V5 + db._V6 + db._V7 + "PRAGMA user_version=7;")
+    for i in range(3):
+        old.execute(
+            "INSERT INTO journal (market, symbol, side, qty, price, fee, ts, created_at, reason) "
+            "VALUES ('moex','SBER','buy',?,?,0.5,?,5,'причина')",
+            (10 + i, 270.5 + i, 1000 + i),
+        )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    try:
+        rows = conn.execute("SELECT qty, price, fee, reason, mode, uid, deleted_at FROM journal ORDER BY ts").fetchall()
+        assert [(r[0], r[1], r[2], r[3], r[4], r[6]) for r in rows] == [
+            (10, 270.5, 0.5, "причина", "real", None),
+            (11, 271.5, 0.5, "причина", "real", None),
+            (12, 272.5, 0.5, "причина", "real", None),
+        ]
+        assert len({r[5] for r in rows}) == 3 and all(r[5] for r in rows)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE journal SET mode = 'demo'")
+    finally:
+        conn.close()
+    backup = sqlite3.connect(str(path) + ".v7.bak")
+    try:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert backup.execute("SELECT COUNT(*) FROM journal").fetchone()[0] == 3
+    finally:
+        backup.close()

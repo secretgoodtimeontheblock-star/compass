@@ -2,20 +2,24 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
-import type { Instrument, JournalDraft, JournalEntry, Position } from "../types";
+import type { Instrument, JournalDraft, JournalEntry, JournalMode, Position } from "../types";
 import { AiAnswer } from "./AiAnswer";
 
 interface Props {
   instrument: Instrument | undefined;
   entries: JournalEntry[]; // по выбранному тикеру
-  positions: Position[]; // по всем
+  positions: Position[]; // по всем тикерам выбранного режима
+  mode: JournalMode;
+  onModeChange: (m: JournalMode) => void;
   lastPrice: number | undefined;
   onChanged: () => void;
   onSelect: (i: Instrument) => void;
   draft: JournalDraft | null;
 }
 
-export function JournalPanel({ instrument, entries, positions, lastPrice, onChanged, onSelect, draft }: Props) {
+const MODE_LABELS: Record<JournalMode, string> = { real: "Реальные", paper: "Учебные", historical: "Исторические" };
+
+export function JournalPanel({ instrument, entries, positions, mode, onModeChange, lastPrice, onChanged, onSelect, draft }: Props) {
   const ai = useAiRun();
   const review = (refresh = false) => void ai.run((r) => api.reviewJournal({}, r), refresh);
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -29,6 +33,8 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
   const [signalId, setSignalId] = useState<number | null>(null);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [deleted, setDeleted] = useState<JournalEntry[] | null>(null);
+  const [info, setInfo] = useState<string>();
 
   useEffect(() => {
     if (!draft) return;
@@ -59,6 +65,7 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
         reason,
         planned_stop: plannedStop ? Number(plannedStop) : null,
         signal_id: signalId,
+        mode,
       });
       setQty("");
       setNote("");
@@ -78,6 +85,8 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
     setError(undefined);
     try {
       await api.removeJournal(id);
+      setInfo("Запись убрана из журнала, но не стёрта: её можно вернуть в разделе «Удалённые записи».");
+      if (deleted) setDeleted(await api.deletedJournal());
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось удалить");
@@ -101,12 +110,76 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
     }
   };
 
+  const showDeleted = async () => {
+    setError(undefined);
+    try {
+      setDeleted(await api.deletedJournal());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось загрузить удалённые записи");
+    }
+  };
+
+  const restoreEntry = async (id: number) => {
+    setError(undefined);
+    try {
+      await api.restoreJournalEntry(id);
+      setDeleted(await api.deletedJournal());
+      setInfo("Запись возвращена.");
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось вернуть запись");
+    }
+  };
+
+  const saveBackup = async () => {
+    setError(undefined);
+    try {
+      const res = await fetch("/api/journal/backup.json");
+      if (!res.ok) throw new Error("Не удалось создать резервную копию");
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `compass-journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setInfo("Резервная копия сохранена: все режимы и удалённые записи. Храните файл вне этого компьютера.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось создать резервную копию");
+    }
+  };
+
+  const loadBackup = async (file: File | undefined) => {
+    if (!file) return;
+    setError(undefined);
+    try {
+      const r = await api.restoreJournalBackup(JSON.parse(await file.text()));
+      setInfo(`Восстановлено записей: ${r.added}. Уже были в журнале: ${r.skipped}.`);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof SyntaxError ? "Файл не похож на резервную копию Compass" : e instanceof Error ? e.message : "Не удалось восстановить");
+    }
+  };
+
   const open = positions.filter((p) => p.qty > 0 || p.trades > 0);
 
   return (
     <div className="scroll">
+      <div className="seg" role="group" aria-label="Режим сделок" style={{ margin: "8px 12px 0" }}>
+        {(Object.keys(MODE_LABELS) as JournalMode[]).map((m) => (
+          <button key={m} aria-pressed={mode === m} onClick={() => onModeChange(m)}>
+            {MODE_LABELS[m]}
+          </button>
+        ))}
+      </div>
+      {mode !== "real" && (
+        <p className="notice" style={{ margin: "6px 12px 0" }}>
+          {mode === "paper"
+            ? "Учебные сделки: без реальных денег, в статистику реальных сделок не входят."
+            : "Исторические сделки: разбор старой или чужой истории, в статистику реальных сделок не входят."}
+        </p>
+      )}
       <div className="panel-head" style={{ paddingBottom: 2 }}>
-        Мои позиции
+        Мои позиции · {MODE_LABELS[mode].toLowerCase()}
         <button className="btn small" onClick={() => void exportCsv()}>
           Экспорт CSV
         </button>
@@ -147,7 +220,36 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
         </table>
       )}
 
-      {positions.length > 0 && (
+      {info && <div className="notice" style={{ margin: "6px 12px 0" }}>{info}</div>}
+      {error && <div className="error">{error}</div>}
+      <div className="row" style={{ padding: "8px 12px 0", gap: 6, flexWrap: "wrap" }}>
+        <button className="btn small" onClick={() => void saveBackup()}>Резервная копия</button>
+        <label className="btn small" style={{ cursor: "pointer" }}>
+          Восстановить из копии
+          <input type="file" accept="application/json,.json" hidden onChange={(e) => { void loadBackup(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+        <button className="btn small" onClick={() => void showDeleted()}>Удалённые записи</button>
+      </div>
+      {deleted && (
+        <div style={{ padding: "6px 12px 0" }}>
+          {deleted.length === 0 ? (
+            <div className="muted">Удалённых записей нет.</div>
+          ) : (
+            deleted.map((d) => (
+              <div className="card" key={d.id}>
+                <div className="row">
+                  <span className="muted">{d.symbol} · {MODE_LABELS[d.mode]}</span>
+                  <span className="muted">{fmtDateTime(d.ts)}</span>
+                </div>
+                <div className="num">{d.side === "buy" ? "Покупка" : "Продажа"} {fmtNum(d.qty, 6)} × {fmtPrice(d.price)}</div>
+                <button className="btn small" onClick={() => void restoreEntry(d.id)}>Вернуть</button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {positions.length > 0 && mode === "real" && (
         <div style={{ padding: "8px 12px 0" }}>
           {!ai.result && (
             <button className="btn" disabled={ai.busy} onClick={() => review()}>
@@ -161,7 +263,7 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
       {instrument ? (
         <>
           <div className="panel-head" style={{ paddingBottom: 6 }}>
-            Записать сделку · {instrument.symbol}
+            Записать сделку · {instrument.symbol} · {MODE_LABELS[mode].toLowerCase()}
           </div>
           <div className="form-grid">
             <div className="seg full" style={{ justifySelf: "start" }}>
@@ -219,8 +321,6 @@ export function JournalPanel({ instrument, entries, positions, lastPrice, onChan
               {busy ? "Сохраняем…" : "Записать"}
             </button>
           </div>
-          {error && <div className="error">{error}</div>}
-
           <div className="panel-head" style={{ paddingBottom: 2 }}>
             История по {instrument.symbol}
           </div>

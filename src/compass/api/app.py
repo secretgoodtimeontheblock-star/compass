@@ -23,7 +23,7 @@ from compass.api.guard import install_guard
 from compass.backtest import backtest
 from compass.cache import CandleCache
 from compass.data_quality import check_candles
-from compass.journal import Entry, Journal
+from compass.journal import MODES, Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument, InstrumentInfo, closed_candles
@@ -82,6 +82,7 @@ class JournalRequest(BaseModel):
     signal_id: int | None = None
     planned_stop: float | None = None
     reason: str = ""
+    mode: str = "real"  # real | paper | historical
 
 
 class WatchItem(BaseModel):
@@ -405,13 +406,41 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             headers={"Content-Disposition": 'attachment; filename="compass-journal.csv"'},
         )
 
+    @app.get("/api/journal/backup.json")
+    def journal_backup() -> Response:
+        return JSONResponse(
+            svc.journal.backup(),
+            headers={"Content-Disposition": 'attachment; filename="compass-journal-backup.json"'},
+        )
+
+    @app.post("/api/journal/restore")
+    def journal_restore(payload: dict) -> dict:
+        return svc.journal.restore_backup(payload)
+
+    @app.get("/api/journal/deleted")
+    def journal_deleted() -> list[dict]:
+        return [asdict(e) for e in svc.journal.deleted()]
+
+    @app.post("/api/journal/{entry_id}/restore")
+    def journal_undelete(entry_id: int) -> dict:
+        if not svc.journal.restore(entry_id):
+            raise HTTPException(404, "Удалённой записи с таким номером нет")
+        return {"restored": entry_id}
+
+    def _mode(mode: str) -> str | None:
+        if mode == "all":
+            return None
+        if mode not in MODES:
+            raise ValueError("Режим — real, paper, historical или all")
+        return mode
+
     @app.get("/api/journal")
-    def journal_list(market: str | None = None, symbol: str | None = None) -> list[dict]:
-        return [asdict(e) for e in svc.journal.list(market, symbol)]
+    def journal_list(market: str | None = None, symbol: str | None = None, mode: str = "real") -> list[dict]:
+        return [asdict(e) for e in svc.journal.list(market, symbol, _mode(mode))]
 
     @app.get("/api/journal/positions")
-    def journal_positions() -> list[dict]:
-        return [asdict(p) for p in svc.journal.positions()]
+    def journal_positions(mode: str = "real") -> list[dict]:
+        return [asdict(p) for p in svc.journal.positions(_mode(mode))]
 
     @app.post("/api/journal", status_code=201)
     def journal_add(req: JournalRequest) -> dict:

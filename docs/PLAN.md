@@ -110,3 +110,8 @@
   номинала: стоимость покупки = цена·номинал/100 + НКД. Если параметры не получены, ответ говорит об этом (`complete=false`) и для крипты
   берёт шаг 1e-6 с предупреждением; лот МосБиржи без ISS берётся только из справочника. В ответ `/api/risk` добавлены `currency`, `warnings`.
 
+- **Журнал, схема 8:** `journal.mode` (real/paper/historical; прежние записи — real), `journal.uid` (уникален), `journal.deleted_at`. Удаление стало
+  мягким (`DELETE /api/journal/{id}` по-прежнему 204, запись можно вернуть: `POST /api/journal/{id}/restore`, список — `GET /api/journal/deleted`).
+  `GET /api/journal` и `/api/journal/positions` по умолчанию отдают только реальные сделки (`mode=paper|historical|all`); позиции считаются по
+  каждому режиму отдельно. Резервная копия — `GET /api/journal/backup.json`, восстановление — `POST /api/journal/restore` (по uid, без дублей,
+  всё или ничего). AI-разбор журнала работает только по реальным сделкам. Копия `.v7.bak` создаётся при миграции.

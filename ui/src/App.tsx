@@ -18,7 +18,7 @@ import { loadPref, savePref, useApi } from "./lib/use-api";
 import { useLiveCandles } from "./lib/use-live-candles";
 import { hasGap, mergeLiveHistory } from "./lib/live-candles";
 import { TF_MS } from "./lib/indicators";
-import type { AiStatus, Instrument, JournalDraft, MarketId, Settings, Signal } from "./types";
+import type { AiStatus, Instrument, JournalDraft, JournalMode, MarketId, Settings, Signal } from "./types";
 
 type Tab = "signals" | "backtest" | "journal" | "ai";
 type Toast = { id: number; title: string; text: string };
@@ -103,7 +103,8 @@ export default function App() {
   const strategiesApi = useApi(() => api.strategies(), []);
   const watchApi = useApi(() => api.watchlist(), []);
   const signalsApi = useApi(() => api.signals({ limit: 200 }), [], 30_000);
-  const positionsApi = useApi(() => api.positions(), []);
+  const [journalMode, setJournalMode] = useState<JournalMode>("real");
+  const positionsApi = useApi(() => api.positions(journalMode), [journalMode]);
   const aiStatusApi = useApi(() => api.aiStatus(), []);
 
   // AI: согласие на отправку данных запрашивается в момент первого обращения, а не «на всякий случай»
@@ -146,8 +147,8 @@ export default function App() {
   const gap = market === "crypto" && hasGap(candles, TF_MS[tf]);
 
   const journalApi = useApi(
-    selected ? () => api.journal({ market: selected.market, symbol: selected.symbol }) : null,
-    [selected?.market, selected?.symbol],
+    selected ? () => api.journal({ market: selected.market, symbol: selected.symbol, mode: journalMode }) : null,
+    [selected?.market, selected?.symbol, journalMode],
   );
 
   const allSignals = signalsApi.data ?? [];
@@ -444,6 +445,8 @@ export default function App() {
               instrument={selected}
               entries={journalApi.data ?? []}
               positions={positionsApi.data ?? []}
+              mode={journalMode}
+              onModeChange={setJournalMode}
               lastPrice={last?.c}
               onChanged={() => {
                 journalApi.reload();

@@ -7,6 +7,7 @@ import type {
   CandlesResponse,
   Instrument,
   JournalEntry,
+  JournalMode,
   Market,
   MarketId,
   Position,
@@ -110,11 +111,16 @@ export const api = {
   aiAsk: (p: { question: string; market?: MarketId; symbol?: string; tf?: string }, refresh = false) =>
     request<AiResult>("/api/ai/ask", json("POST", { ...p, refresh })),
 
-  journal: (p: { market?: MarketId; symbol?: string } = {}) =>
+  journal: (p: { market?: MarketId; symbol?: string; mode?: JournalMode } = {}) =>
     request<JournalEntry[]>(`/api/journal?${qs(p)}`),
-  positions: () => request<Position[]>("/api/journal/positions"),
+  positions: (mode: JournalMode = "real") => request<Position[]>(`/api/journal/positions?${qs({ mode })}`),
+  deletedJournal: () => request<JournalEntry[]>("/api/journal/deleted"),
+  restoreJournalEntry: (id: number) => request<{ restored: number }>(`/api/journal/${id}/restore`, { method: "POST" }),
+  restoreJournalBackup: (payload: unknown) =>
+    request<{ added: number; skipped: number }>("/api/journal/restore", json("POST", payload)),
   addJournal: (
-    e: Omit<JournalEntry, "id" | "signal_id" | "planned_stop" | "reason"> & {
+    e: Omit<JournalEntry, "id" | "signal_id" | "planned_stop" | "reason" | "mode" | "uid" | "deleted_at"> & {
+      mode?: JournalMode;
       signal_id?: number | null;
       planned_stop?: number | null;
       reason?: string;

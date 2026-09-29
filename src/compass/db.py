@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _V1 = """
 CREATE TABLE candles (
@@ -110,6 +110,16 @@ _V7 = """
 ALTER TABLE signals ADD COLUMN params TEXT;
 """
 
+# Режим сделки (реальная/учебная/историческая), стабильный uid для восстановления без дублей и
+# мягкое удаление. Старые записи считаются реальными: других раньше не было.
+_V8 = """
+ALTER TABLE journal ADD COLUMN mode TEXT NOT NULL DEFAULT 'real' CHECK (mode IN ('real','paper','historical'));
+ALTER TABLE journal ADD COLUMN uid TEXT;
+ALTER TABLE journal ADD COLUMN deleted_at INTEGER;
+UPDATE journal SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+CREATE UNIQUE INDEX journal_uid ON journal (uid);
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -179,4 +189,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 7:
         conn.executescript(_V7)
         conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+    if version < 8:
+        conn.executescript(_V8)
+        conn.execute("PRAGMA user_version = 8")
         conn.commit()

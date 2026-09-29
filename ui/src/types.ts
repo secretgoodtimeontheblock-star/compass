@@ -245,7 +245,12 @@ export interface JournalEntry {
   signal_id: number | null;
   planned_stop: number | null;
   reason: string;
+  mode: JournalMode;
+  uid: string;
+  deleted_at: number | null;
 }
+
+export type JournalMode = "real" | "paper" | "historical";
 
 export interface Position {
   market: MarketId;
@@ -255,6 +260,7 @@ export interface Position {
   realized_pnl: number;
   fees: number;
   trades: number;
+  mode: JournalMode;
 }
 
 export interface ScanResponse {
