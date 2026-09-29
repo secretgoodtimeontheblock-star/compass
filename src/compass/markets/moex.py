@@ -91,6 +91,18 @@ class MoexAdapter:
             offset += len(rows)
         return out[-limit:]
 
+    def lot_size(self, symbol: str) -> int:
+        """Размер лота: акции на МосБирже торгуются лотами (10, 100, 1000 штук)."""
+        data = self._get(
+            f"/engines/stock/markets/shares/boards/{self._board}/securities/{symbol}.json",
+            {"securities.columns": "SECID,LOTSIZE"},
+        )
+        block = data.get("securities") or {}
+        rows = block.get("data") or []
+        if not rows:
+            raise MarketError(f"Тикер {symbol} не найден на МосБирже")
+        return int(rows[0][block["columns"].index("LOTSIZE")])
+
     def search(self, query: str) -> list[Instrument]:
         data = self._get(
             "/securities.json",

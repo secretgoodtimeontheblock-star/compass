@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _V1 = """
 CREATE TABLE candles (
@@ -26,6 +26,23 @@ CREATE TABLE watchlist (
   added_at INTEGER NOT NULL,
   PRIMARY KEY (market, symbol)
 );
+"""
+
+
+_V2 = """
+CREATE TABLE signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  market TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+  strategy TEXT NOT NULL, side TEXT NOT NULL CHECK (side IN ('buy','exit')),
+  candle_ts INTEGER NOT NULL,   -- закрытая свеча, на которой сработал сигнал
+  price REAL NOT NULL, stop REAL,
+  created_at INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
+  -- один и тот же сигнал на одной свече не дублируется, сколько бы раз ни шёл скан
+  UNIQUE (market, symbol, tf, strategy, candle_ts, side)
+);
+CREATE INDEX signals_created ON signals (created_at DESC);
+
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
@@ -51,4 +68,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 1:
         conn.executescript(_V1)
         conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+    if version < 2:
+        conn.executescript(_V2)
+        conn.execute("PRAGMA user_version = 2")
         conn.commit()
