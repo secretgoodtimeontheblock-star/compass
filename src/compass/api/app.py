@@ -22,6 +22,7 @@ from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
 from compass.backtest import backtest
 from compass.cache import CandleCache
+from compass.data_quality import check_candles
 from compass.journal import Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
@@ -167,7 +168,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     ) -> dict:
         adapter(market)
         res = svc.cache.get(market, symbol, tf, limit)
-        return history_dto(res)
+        return {**history_dto(res), "quality": check_candles(res.candles, market, tf)}
 
     @app.get("/api/live")
     async def live_candles(request: Request, symbol: str, tf: str = "1d"):
@@ -236,6 +237,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         open_dropped = len(candles) < len(res.candles)
         if len(candles) < 30:
             raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 закрытых свечей)")
+        quality = check_candles(candles, req.market, req.tf)
         df = candles_to_df(candles)
         bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct)
         ts = df["ts"].to_numpy()
@@ -254,6 +256,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "params": params,
             "stale": res.stale,
             "metrics": metrics,
+            "data_quality": quality,
             "warnings": warnings,
             "validation": {
                 "walk_forward": walk_forward(df, bt, req.capital),
