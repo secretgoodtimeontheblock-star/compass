@@ -7,6 +7,7 @@ import pytest
 from compass.api.app import Services
 from compass.cache import CandleCache
 from compass.db import connect
+from compass.journal import Journal
 from compass.markets import MarketError
 from compass.models import Candle, Instrument
 from compass.settings import Settings
@@ -78,7 +79,7 @@ def env() -> Env:
     notifier = RecordingNotifier()
     now = [10_000 * DAY]
     engine = SignalEngine(cache, watchlist, settings, store, notifier, now_ms=lambda: now[0])
-    svc = Services(adapters, cache, watchlist, settings, store, engine)
+    svc = Services(adapters, cache, watchlist, settings, store, engine, Journal(conn))
     return Env(svc, adapter, notifier, now)
 
 

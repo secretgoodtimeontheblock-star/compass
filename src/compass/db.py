@@ -6,7 +6,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _V1 = """
 CREATE TABLE candles (
@@ -46,6 +46,22 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
+_V3 = """
+CREATE TABLE journal (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  market TEXT NOT NULL, symbol TEXT NOT NULL,
+  side TEXT NOT NULL CHECK (side IN ('buy','sell')),
+  qty REAL NOT NULL CHECK (qty > 0), price REAL NOT NULL CHECK (price > 0),
+  fee REAL NOT NULL DEFAULT 0 CHECK (fee >= 0),
+  ts INTEGER NOT NULL,          -- когда сделка совершена, мс UTC
+  note TEXT NOT NULL DEFAULT '',
+  signal_id INTEGER,            -- из какого сигнала родилась сделка (необязательно)
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX journal_symbol ON journal (market, symbol, ts);
+"""
+
+
 def connect(path: Path | str) -> sqlite3.Connection:
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -72,4 +88,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 2:
         conn.executescript(_V2)
         conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+    if version < 3:
+        conn.executescript(_V3)
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()

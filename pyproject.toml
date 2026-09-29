@@ -16,7 +16,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+desktop = ["pywebview>=5"]
 dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+compass = "compass.__main__:main"
+
+[project.gui-scripts]
+compass-desktop = "compass.desktop:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/compass"]

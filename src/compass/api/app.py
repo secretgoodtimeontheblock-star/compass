@@ -6,14 +6,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from compass import __version__
 from compass.backtest import backtest
 from compass.cache import CandleCache
+from compass.journal import Entry, Journal
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument
 from compass.risk import position_size
@@ -24,6 +27,7 @@ from compass.strategies import STRATEGIES, candles_to_df
 from compass.watchlist import Watchlist
 
 CRYPTO_QTY_STEP = 1e-6
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"  # собранный интерфейс (ui/ → pnpm build)
 
 
 @dataclass
@@ -34,7 +38,20 @@ class Services:
     settings: Settings
     signals: SignalStore
     engine: SignalEngine
+    journal: Journal
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
+
+
+class JournalRequest(BaseModel):
+    market: str
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    ts: int  # мс UTC
+    fee: float = 0.0
+    note: str = ""
+    signal_id: int | None = None
 
 
 class WatchItem(BaseModel):
@@ -176,8 +193,13 @@ def create_app(svc: Services) -> FastAPI:
     # --- сигналы ---
 
     @app.get("/api/signals")
-    def signals_list(limit: int = Query(100, ge=1, le=500), unseen: bool = False) -> list[dict]:
-        return [_signal_dto(s) for s in svc.signals.list(limit, unseen)]
+    def signals_list(
+        limit: int = Query(100, ge=1, le=500),
+        unseen: bool = False,
+        market: str | None = None,
+        symbol: str | None = None,
+    ) -> list[dict]:
+        return [_signal_dto(s) for s in svc.signals.list(limit, unseen, market, symbol)]
 
     @app.post("/api/signals/seen")
     def signals_seen() -> dict:
@@ -213,6 +235,30 @@ def create_app(svc: Services) -> FastAPI:
     @app.put("/api/settings")
     def settings_put(changes: dict) -> dict:
         return svc.settings.update(changes)
+
+    # --- журнал сделок ---
+
+    @app.get("/api/journal")
+    def journal_list(market: str | None = None, symbol: str | None = None) -> list[dict]:
+        return [asdict(e) for e in svc.journal.list(market, symbol)]
+
+    @app.get("/api/journal/positions")
+    def journal_positions() -> list[dict]:
+        return [asdict(p) for p in svc.journal.positions()]
+
+    @app.post("/api/journal", status_code=201)
+    def journal_add(req: JournalRequest) -> dict:
+        adapter(req.market)
+        return asdict(svc.journal.add(Entry(**req.model_dump())))
+
+    @app.delete("/api/journal/{entry_id}", status_code=204)
+    def journal_remove(entry_id: int) -> None:
+        if not svc.journal.remove(entry_id):
+            raise HTTPException(404, "Записи нет в журнале")
+
+    # Интерфейс — последним: маршруты /api/* должны матчиться раньше статики.
+    if STATIC_DIR.is_dir():
+        app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
 
     return app
 

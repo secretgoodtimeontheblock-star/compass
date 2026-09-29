@@ -8,10 +8,11 @@
 
 ## Статус
 
-Готово (этапы 0–1, только движок и API, интерфейса пока нет):
-данные МосБиржи и крипты, кэш свечей, вотчлист, три стратегии (пересечение средних,
-RSI, пробой канала), бэктест, поиск сигналов по расписанию, риск-калькулятор,
-уведомления в Telegram. Интерфейс и AI — следующие этапы, см. [docs/PLAN.md](docs/PLAN.md).
+Готово (этапы 0–2): данные МосБиржи и крипты, кэш свечей, три стратегии (пересечение
+средних, RSI, пробой канала), бэктест, поиск сигналов по расписанию, риск-калькулятор,
+Telegram-уведомления, журнал сделок и интерфейс: график со свечами, объёмом, SMA и
+маркерами сигналов/своих сделок, избранное, лента сигналов, проверка стратегий с кривой
+капитала, журнал, тёмная/светлая тема. AI — следующий этап, см. [docs/PLAN.md](docs/PLAN.md).
 
 ## Как это работает
 
@@ -33,16 +34,25 @@ RSI, пробой канала), бэктест, поиск сигналов п�
 ## API (http://127.0.0.1:8765/docs)
 
 `/api/markets`, `/api/candles`, `/api/watchlist`, `/api/strategies`, `/api/backtest`,
-`/api/signals`, `/api/scan`, `/api/risk`, `/api/settings`.
+`/api/signals`, `/api/scan`, `/api/risk`, `/api/settings`, `/api/journal`.
 
 ## Запуск (разработка)
 
 ```bash
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
-.venv\Scripts\python -m compass          # API на http://127.0.0.1:8765/docs
-.venv\Scripts\python -m pytest
+.venv\Scripts\python -m pip install -e ".[desktop,dev]"
+
+# интерфейс (Node 22, pnpm): собирается прямо в src/compass/static
+cd ui && pnpm install && pnpm build && cd ..
+
+.venv\Scripts\python -m compass.desktop   # нативное окно (pywebview / WebView2)
+.venv\Scripts\python -m compass           # только движок: http://127.0.0.1:8765
+.venv\Scripts\python -m pytest            # тесты движка
+cd ui && pnpm test                        # тесты интерфейса
 ```
+
+Разработка интерфейса с горячей перезагрузкой: движок (`python -m compass`) на :8765 и
+`cd ui && pnpm dev` (Vite на :5173 проксирует `/api` на движок).
 
 Данные пользователя (кэш, вотчлист) — `%APPDATA%\Compass\compass.sqlite3`
 (переопределяется `COMPASS_DATA_DIR`).

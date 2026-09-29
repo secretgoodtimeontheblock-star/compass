@@ -73,7 +73,7 @@ def test_db_from_future_version_is_refused(tmp_path) -> None:
         connect(p)
 
 
-def test_v1_database_is_migrated_to_v2(tmp_path) -> None:
+def test_v1_database_is_migrated_to_latest(tmp_path) -> None:
     import sqlite3
 
     from compass import db
@@ -86,9 +86,10 @@ def test_v1_database_is_migrated_to_v2(tmp_path) -> None:
     c.commit()
     c.close()
     conn = connect(p)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 3
     assert conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0] == 1  # данные целы
-    conn.execute("SELECT COUNT(*) FROM signals")  # таблица появилась
+    conn.execute("SELECT COUNT(*) FROM signals")  # таблицы новых версий появились
+    conn.execute("SELECT COUNT(*) FROM journal")
 
 
 def test_api_candles_watchlist_and_errors(env: Env) -> None:

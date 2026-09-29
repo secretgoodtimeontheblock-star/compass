@@ -7,6 +7,8 @@ dist/
 build/
 *.spec
 node_modules/
+# собранный интерфейс (ui/ → `pnpm build`); в git не хранится, кладётся в пакет при сборке
+src/compass/static/
 # локальные данные пользователя: кэш свечей, журнал, настройки
 data/
 *.sqlite3

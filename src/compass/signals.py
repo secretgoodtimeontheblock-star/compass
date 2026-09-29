@@ -67,13 +67,28 @@ class SignalStore:
             )
         return cur.rowcount == 1
 
-    def list(self, limit: int = 100, unseen_only: bool = False) -> list[Signal]:
+    def list(
+        self,
+        limit: int = 100,
+        unseen_only: bool = False,
+        market: str | None = None,
+        symbol: str | None = None,
+    ) -> list[Signal]:
+        where, args = [], []
+        if unseen_only:
+            where.append("seen = 0")
+        if market:
+            where.append("market = ?")
+            args.append(market)
+        if symbol:
+            where.append("symbol = ?")
+            args.append(symbol)
         sql = (
             "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen "
-            "FROM signals " + ("WHERE seen = 0 " if unseen_only else "") + "ORDER BY id DESC LIMIT ?"
+            "FROM signals " + (f"WHERE {' AND '.join(where)} " if where else "") + "ORDER BY id DESC LIMIT ?"
         )
         with self._lock:
-            rows = self._conn.execute(sql, (limit,)).fetchall()
+            rows = self._conn.execute(sql, (*args, limit)).fetchall()
         return [Signal(*r[:10], seen=bool(r[10])) for r in rows]
 
     def mark_all_seen(self) -> int:
