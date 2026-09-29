@@ -1,5 +1,5 @@
-"""Локальный HTTP API. Слушает только 127.0.0.1, без авторизации — это API
-одного пользователя на его машине, не сервис."""
+"""Локальный HTTP API. Слушает только 127.0.0.1 — это API одного пользователя на его
+машине, не сервис. От чужих веб-страниц защищает api/guard.py."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from compass import __version__
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
+from compass.api.guard import install_guard
 from compass.backtest import backtest
 from compass.cache import CandleCache
 from compass.journal import Entry, Journal
@@ -100,7 +101,7 @@ class RiskRequest(BaseModel):
     risk_pct: float | None = None
 
 
-def create_app(svc: Services) -> FastAPI:
+def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if svc.scanner:
@@ -112,6 +113,7 @@ def create_app(svc: Services) -> FastAPI:
                 svc.scanner.stop()
 
     app = FastAPI(title="Compass", version=__version__, lifespan=lifespan)
+    install_guard(app, session_token)
 
     def adapter(market: str) -> MarketAdapter:
         a = svc.adapters.get(market)

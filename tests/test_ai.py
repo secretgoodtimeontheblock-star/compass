@@ -463,7 +463,7 @@ def test_api_ai_flow(env: Env) -> None:
     env.now[0] = 26 * DAY + 1
     env.services.engine.scan()
     (sig,) = [s for s in env.services.signals.list() if s.strategy == "donchian"]
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
 
     assert client.get("/api/ai/status").json()["provider"] == "off"
     r = client.post("/api/ai/explain-signal", json={"signal_id": sig.id})
@@ -487,7 +487,7 @@ def test_api_ai_flow(env: Env) -> None:
 
 
 def test_api_ai_errors_and_validation(env: Env) -> None:
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     client.put("/api/settings", json={"ai_provider": "ollama"})
     env.local.error = AiError("провайдер упал")
     r = client.post("/api/ai/ask", json={"question": "Что такое RSI?"})
@@ -507,7 +507,7 @@ def test_ai_warns_about_stale_data_in_prompt_response_and_cache(env: Env, endpoi
     env.adapter.data["SBER"] = day_candles([100.0 + i for i in range(60)])
     env.services.signals.insert(sample_signal())
     sig = env.services.signals.list()[0]
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     use(env, "ollama")
     request = {"signal_id": sig.id} if endpoint == "explain-signal" else {
         "question": "Что показывает RSI?", "market": "moex", "symbol": "SBER",
@@ -532,7 +532,7 @@ def test_ai_without_market_data_returns_explicit_warning(env: Env) -> None:
 
     use(env, "ollama")
     env.adapter.data["SBER"] = MarketError("down")
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     response = client.post("/api/ai/ask", json={
         "question": "Что показывает RSI?", "market": "moex", "symbol": "SBER",
     })
@@ -543,7 +543,7 @@ def test_ai_without_market_data_returns_explicit_warning(env: Env) -> None:
 
 def test_api_ask_with_context_and_journal_review(env: Env) -> None:
     env.adapter.data["SBER"] = day_candles([100.0 + i * 0.5 for i in range(80)])
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     client.put("/api/settings", json={"ai_provider": "ollama"})
 
     r = client.post("/api/ai/ask", json={"question": "Что показывает RSI сейчас?", "market": "moex", "symbol": "SBER"})

@@ -107,7 +107,7 @@ def test_api_stream_metadata_validation_and_cleanup(env: Env):
 
     feed = FiniteLive(env.services.cache)
     env.services.live = feed
-    with TestClient(create_app(env.services)) as client:
+    with TestClient(create_app(env.services), base_url="http://127.0.0.1") as client:
         assert client.get("/api/markets").json()[0]["delay_seconds"] == 900
         assert client.get("/api/live", params={"symbol": "../bad"}).status_code == 422
         assert client.get("/api/live", params={"symbol": "BTC/USDT"}, headers={"Origin": "https://example.com"}).status_code == 403

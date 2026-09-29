@@ -93,7 +93,7 @@ def test_stale_cache_does_not_create_signals_and_recovers(env: Env) -> None:
     env.now[0] = closed_after(len(BREAKOUT))
     env.services.cache.get("moex", "XYZ", "1d", 300)
     env.adapter.data["XYZ"] = MarketError("down")
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     result = client.post("/api/scan").json()
     assert result["new"] == []
     assert "XYZ" in result["errors"][0] and "приостановлен" in result["errors"][0]
@@ -178,7 +178,7 @@ def test_settings_update_is_atomic(env: Env) -> None:
 def test_api_backtest_signals_risk_settings(env: Env) -> None:
     closes = [100 + (i % 7) * 2 + i * 0.5 for i in range(120)]
     env.adapter.data["SBER"] = day_candles(closes)
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
 
     r = client.post("/api/backtest", json={"market": "moex", "symbol": "SBER", "strategy": "donchian"})
     assert r.status_code == 200
@@ -205,7 +205,7 @@ def test_api_scan_and_seen_flow(env: Env) -> None:
     watch(env)
     env.adapter.data["XYZ"] = day_candles(BREAKOUT)
     env.now[0] = closed_after(len(BREAKOUT))
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     assert any(s["strategy"] == "donchian" for s in client.post("/api/scan").json()["new"])
     assert len(client.get("/api/signals", params={"unseen": True}).json()) >= 1
     assert client.post("/api/signals/seen").json()["marked"] >= 1

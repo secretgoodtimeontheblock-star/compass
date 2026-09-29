@@ -94,7 +94,7 @@ def test_v1_database_is_migrated_to_latest(tmp_path) -> None:
 
 def test_api_candles_watchlist_and_errors(env: Env) -> None:
     load(env)
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
 
     r = client.get("/api/candles", params={"market": "moex", "symbol": "SBER", "tf": "1d", "limit": 3})
     assert r.status_code == 200 and len(r.json()["candles"]) == 3 and r.json()["stale"] is False
@@ -112,5 +112,5 @@ def test_api_candles_watchlist_and_errors(env: Env) -> None:
 def test_api_watchlist_delete_symbol_with_slash(env: Env) -> None:
     wl: Watchlist = env.services.watchlist
     wl.add(Instrument("BTC/USDT", "BTC/USDT", "moex"))
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     assert client.delete("/api/watchlist/moex/BTC/USDT").status_code == 204

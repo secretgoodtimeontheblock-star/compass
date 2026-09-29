@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import socket
 import sys
 import threading
@@ -94,7 +95,9 @@ def main() -> None:
                 "(Evergreen Bootstrapper) и запустите Compass снова."
             )
         port = cfg.port if "COMPASS_PORT" in os.environ else free_port()
-        app = create_app(build_services(cfg))
+        # одноразовый токен сессии: только окно приложения получает доступ к API
+        token = secrets.token_urlsafe(32)
+        app = create_app(build_services(cfg), session_token=token)
         server = uvicorn.Server(uvicorn.Config(app, host=cfg.host, port=port, log_level="warning"))
         thread = threading.Thread(target=server.run, name="compass-engine", daemon=True)
         thread.start()
@@ -102,7 +105,7 @@ def main() -> None:
         log.info("Compass слушает http://%s:%s", cfg.host, port)
         try:
             webview.create_window(
-                "Compass", f"http://{cfg.host}:{port}/", width=1360, height=860, min_size=(960, 640)
+                "Compass", f"http://{cfg.host}:{port}/?token={token}", width=1360, height=860, min_size=(960, 640)
             )
             webview.start()
         finally:

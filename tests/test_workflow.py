@@ -16,7 +16,7 @@ def test_workflow_survives_restart(tmp_path, monkeypatch) -> None:
     svc.adapters["moex"]._client.close()
     svc.adapters["moex"] = adapter
     try:
-        with TestClient(create_app(svc)) as client:
+        with TestClient(create_app(svc), base_url="http://127.0.0.1") as client:
             assert client.get("/api/health").json()["ok"]
             assert client.post("/api/watchlist", json={
                 "market": "moex", "symbol": "SBER", "name": "Сбербанк",
@@ -41,7 +41,7 @@ def test_workflow_survives_restart(tmp_path, monkeypatch) -> None:
 
     restored = build_services(cfg, background_scan=False)
     try:
-        with TestClient(create_app(restored)) as client:
+        with TestClient(create_app(restored), base_url="http://127.0.0.1") as client:
             assert client.get("/api/watchlist").json()[0]["symbol"] == "SBER"
             assert client.get("/api/settings").json()["capital"] == 50_000
             assert client.get("/api/journal").json() == [saved_entry]

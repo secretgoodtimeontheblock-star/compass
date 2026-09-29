@@ -66,7 +66,7 @@ def test_cannot_delete_buy_that_backs_a_sell(env: Env) -> None:
 
 
 def test_journal_keeps_plan_and_exports_csv(env: Env) -> None:
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     body = {
         "market": "moex",
         "symbol": "SBER",
@@ -87,7 +87,7 @@ def test_journal_keeps_plan_and_exports_csv(env: Env) -> None:
 
 
 def test_api_journal_flow(env: Env) -> None:
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     body = {"market": "moex", "symbol": "SBER", "side": "buy", "qty": 10, "price": 250, "ts": 1_700_000_000_000}
     r = client.post("/api/journal", json=body)
     assert r.status_code == 201 and r.json()["id"] > 0
@@ -117,7 +117,7 @@ def test_signals_filter_by_symbol(env: Env) -> None:
     st = env.services.signals
     st.insert(Signal("moex", "SBER", "1d", "donchian", "buy", 1, 10.0))
     st.insert(Signal("moex", "GAZP", "1d", "donchian", "buy", 1, 10.0))
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     got = client.get("/api/signals", params={"market": "moex", "symbol": "SBER"}).json()
     assert [s["symbol"] for s in got] == ["SBER"]
 
@@ -125,7 +125,7 @@ def test_signals_filter_by_symbol(env: Env) -> None:
 def test_ui_is_served_but_api_is_not_shadowed(env: Env, tmp_path, monkeypatch) -> None:
     (tmp_path / "index.html").write_text("<title>Compass UI</title>", encoding="utf-8")
     monkeypatch.setattr(app_module, "STATIC_DIR", tmp_path)
-    client = TestClient(create_app(env.services))
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     assert "Compass UI" in client.get("/").text
     assert client.get("/api/health").json()["ok"] is True
     assert client.get("/api/nope").status_code == 404
