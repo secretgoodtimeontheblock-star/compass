@@ -545,3 +545,24 @@ export interface LevelDto {
   label: string;
   created_at: number;
 }
+
+export interface ScreenerRow {
+  market: MarketId;
+  symbol: string;
+  name: string;
+  tf: string;
+  paused: boolean;
+  status: "ok" | "stale" | "error" | "short";
+  message: string;
+  signals: { strategy: string; side: "buy" | "exit"; id: number }[];
+  last?: number;
+  change_bar_pct?: number | null;
+  change_20_pct?: number | null;
+  above_sma20?: boolean | null;
+  above_sma50?: boolean | null;
+  rsi14?: number | null;
+  atr_pct?: number | null;
+  volume_ratio?: number | null;
+  nearest_level?: { price: number; distance_pct: number } | null;
+  rule_state?: Record<string, number>;
+}

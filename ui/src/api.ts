@@ -20,6 +20,7 @@ import type {
   PlanReview,
   Position,
   ReplaySession,
+  ScreenerRow,
   RiskResponse,
   ScanResponse,
   Settings,
@@ -103,6 +104,7 @@ export const api = {
 
   risk: (b: { market: MarketId; symbol: string; entry: number; stop: number }) =>
     request<RiskResponse>("/api/risk", json("POST", b)),
+  screener: () => request<{ rows: ScreenerRow[]; notes: string[] }>("/api/screener"),
   levels: (market: MarketId, symbol: string) => request<LevelDto[]>(`/api/levels?${qs({ market, symbol })}`),
   addLevel: (b: { market: MarketId; symbol: string; price: number; label: string }) =>
     request<LevelDto>("/api/levels", json("POST", b)),

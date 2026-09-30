@@ -27,9 +27,10 @@ interface Props {
   onQuickAdd: (i: Instrument) => void;
   paused: Set<string>;
   onTogglePause: (i: Instrument) => void;
+  onScreener: () => void;
 }
 
-export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd, paused, onTogglePause }: Props) {
+export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd, paused, onTogglePause, onScreener }: Props) {
   const have = new Set(items.map((i) => i.symbol));
   const quick = QUICK[market].filter((q) => !have.has(q.symbol));
 
@@ -37,6 +38,11 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
     <>
       <div className="panel-head">
         Избранное <span className="muted num">{items.length || ""}</span>
+        {items.length > 0 && (
+          <button className="btn small" onClick={onScreener}>
+            Скринер
+          </button>
+        )}
       </div>
       <div className="scroll">
         {items.length === 0 && (

@@ -8,6 +8,7 @@ import { GettingStarted } from "./components/GettingStarted";
 import { Icon } from "./components/Icon";
 import { JournalPanel } from "./components/JournalPanel";
 import { ReplayPanel } from "./components/ReplayPanel";
+import { ScreenerDialog } from "./components/ScreenerDialog";
 import { ChartExtras } from "./components/ChartExtras";
 import { type ChartLine, type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
@@ -57,6 +58,7 @@ export default function App() {
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(loadPref("guide-dismissed") !== "yes");
+  const [screenerOpen, setScreenerOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [scanBusy, setScanBusy] = useState(false);
   const [settingsOverride, setSettingsOverride] = useState<Settings>();
@@ -329,6 +331,7 @@ export default function App() {
             onQuickAdd={addToWatch}
             paused={new Set(settings?.paused_instruments ?? [])}
             onTogglePause={togglePause}
+            onScreener={() => setScreenerOpen(true)}
           />
         </aside>
 
@@ -561,6 +564,7 @@ export default function App() {
         />
       )}
 
+      {screenerOpen && <ScreenerDialog onClose={() => setScreenerOpen(false)} onSelect={selectInstrument} />}
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div className="toast" key={t.id}>

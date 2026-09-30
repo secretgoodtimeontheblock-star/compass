@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from compass import __version__, oos, portfolio
+from compass import screener as screener_mod
 from compass.accounts import Account, AccountStore
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
@@ -40,6 +41,7 @@ from compass.signals import (
     Signal,
     SignalEngine,
     SignalStore,
+    _chosen_strategies,
     in_quiet_hours,
     signal_expires_at,
     signal_status,
@@ -701,6 +703,49 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "unseen_signals": len(svc.signals.list(500, True)),
             "problem_sources": [x for x in svc.signals.states() if x["status"] in ("stale", "error")],
             "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
+        }
+
+    @app.get("/api/screener")
+    def screener() -> dict:
+        """Факты по избранному на закрытых свечах выбранного таймфрейма рынка. Сбой одного источника не ломает остальные."""
+        cfg = svc.settings.all()
+        now = svc.now_ms()
+        ctx = signal_ctx()
+        active = {}
+        for s in svc.signals.list(500):
+            if signal_status(s, now, ctx["valid"], s.id in ctx["acted"]) == "active":
+                active.setdefault((s.market, s.symbol), []).append({"strategy": s.strategy, "side": s.side, "id": s.id})
+        paused = set(cfg["paused_instruments"])
+        rows = []
+        for inst in svc.watchlist.list():
+            tf = cfg.get(f"tf_{inst.market}")
+            base = {"market": inst.market, "symbol": inst.symbol, "name": inst.name, "tf": tf,
+                    "paused": f"{inst.market}|{inst.symbol}" in paused, "signals": active.get((inst.market, inst.symbol), [])}
+            try:
+                res = svc.cache.get(inst.market, inst.symbol, tf, 300)
+            except MarketError as e:
+                rows.append({**base, "status": "error", "message": str(e)[:200]})
+                continue
+            closed = closed_candles(res.candles, tf, now)
+            if len(closed) < screener_mod.MIN_BARS:
+                rows.append({**base, "status": "short", "message": "Слишком мало закрытых свечей"})
+                continue
+            df = candles_to_df(closed)
+            try:
+                chosen = _chosen_strategies(cfg["instrument_strategies"], inst.market, inst.symbol)
+            except ValueError:
+                chosen = []
+            state = {strat.id: int(strat.target(df, params).iloc[-1]) for strat, params in chosen}
+            levels = [lv.price for lv in (svc.levels.list(inst.market, inst.symbol) if svc.levels else [])]
+            rows.append({**base, "status": "stale" if res.stale else "ok",
+                         "message": "источник недоступен, показан кэш" if res.stale else "",
+                         **screener_mod.screen_row(df, levels, state)})
+        return {
+            "rows": rows,
+            "notes": [
+                "Только факты по закрытым свечам; это фильтр внимания, а не рекомендация.",
+                "«Правило в рынке» — что показывает стратегия на последней закрытой свече, а не совет входить.",
+            ],
         }
 
     # --- сохранённые уровни ---
