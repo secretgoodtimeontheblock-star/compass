@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from compass import __version__, oos, portfolio
+from compass import review_week as review_week_mod
 from compass import screener as screener_mod
 from compass.accounts import Account, AccountStore
 from compass.ai.service import AiService
@@ -704,6 +705,16 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "problem_sources": [x for x in svc.signals.states() if x["status"] in ("stale", "error")],
             "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
         }
+
+    @app.get("/api/review/week")
+    def review_week(days: int = Query(7, ge=1, le=31)) -> dict:
+        """Недельный разбор по каждому счёту отдельно: только рассчитанные факты по реальным сделкам."""
+        now = svc.now_ms()
+        out = []
+        for acc in accounts_store().list():
+            entries = svc.journal.list(market=acc.market, mode="real")
+            out.append(review_week_mod.weekly(acc, entries, lambda uid: plan_store().get_by_uid(uid), now, days))
+        return {"accounts": out}
 
     @app.get("/api/screener")
     def screener() -> dict:

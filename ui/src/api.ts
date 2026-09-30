@@ -27,6 +27,7 @@ import type {
   Signal,
   Strategy,
   WatchStatus,
+  WeekAccount,
 } from "./types";
 
 export class ApiError extends Error {
@@ -104,6 +105,7 @@ export const api = {
 
   risk: (b: { market: MarketId; symbol: string; entry: number; stop: number }) =>
     request<RiskResponse>("/api/risk", json("POST", b)),
+  reviewWeek: (days = 7) => request<{ accounts: WeekAccount[] }>(`/api/review/week?${qs({ days })}`),
   screener: () => request<{ rows: ScreenerRow[]; notes: string[] }>("/api/screener"),
   levels: (market: MarketId, symbol: string) => request<LevelDto[]>(`/api/levels?${qs({ market, symbol })}`),
   addLevel: (b: { market: MarketId; symbol: string; price: number; label: string }) =>

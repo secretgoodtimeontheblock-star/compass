@@ -566,3 +566,25 @@ export interface ScreenerRow {
   nearest_level?: { price: number; distance_pct: number } | null;
   rule_state?: Record<string, number>;
 }
+
+export interface WeekAccount {
+  market: MarketId;
+  name: string;
+  currency: string;
+  days: number;
+  closed_trades: number;
+  entries: number;
+  fees: number;
+  realized: number;
+  win_rate_pct: number | null;
+  best: { symbol: string; pnl: number } | null;
+  worst: { symbol: string; pnl: number } | null;
+  entries_without_stop: number;
+  entries_with_plan: number;
+  entries_without_plan: number;
+  plan_deviations: { plans_reviewed: number; worse_entry: number; bigger_qty: number; risk_exceeded: number; no_stop: number };
+  days_over_daily_limit: string[];
+  days_over_trades_limit: string[];
+  max_trades_per_day: number | null;
+  notes: string[];
+}

@@ -5,6 +5,7 @@ import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/fo
 import type { Instrument, JournalDraft, JournalEntry, JournalMode, Position } from "../types";
 import { AiAnswer } from "./AiAnswer";
 import { PlansSection } from "./PlansSection";
+import { WeekReview } from "./WeekReview";
 
 interface Props {
   instrument: Instrument | undefined;
@@ -253,6 +254,8 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
           )}
         </div>
       )}
+
+      {mode === "real" && <WeekReview refreshKey={entries.length + positions.length} />}
 
       {positions.length > 0 && mode === "real" && (
         <div style={{ padding: "8px 12px 0" }}>
