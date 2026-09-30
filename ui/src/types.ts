@@ -86,6 +86,15 @@ export interface Trade {
   exit_ts: number | null;
   exit_price: number | null;
   pnl_pct: number;
+  exit_reason: "signal" | "stop" | "gap_stop" | "target" | "gap_target" | "open";
+  qty: number;
+  stop: number | null;
+  target: number | null;
+  risk_amount: number | null;
+  pnl_amount: number;
+  mae_pct: number;
+  mfe_pct: number;
+  bars: number;
 }
 
 export interface BacktestMetrics {
@@ -107,6 +116,14 @@ export interface BacktestMetrics {
   payoff_ratio: number | null;
   best_trade_pct: number | null;
   worst_trade_pct: number | null;
+  avg_r: number | null;
+  avg_mae_pct: number | null;
+  avg_mfe_pct: number | null;
+  stops: number;
+  targets: number;
+  gap_exits: number;
+  ambiguous_bars: number;
+  skipped_entries: number;
 }
 
 export interface WalkForwardWindow {
@@ -144,6 +161,9 @@ export interface RunCard {
   end_ts: number;
   data_hash: string;
   created_at: string;
+  strategy_version: string | null;
+  assumptions: string[];
+  rules: { stop_atr_mult: number | null; target_r: number | null; risk_pct: number | null } | null;
 }
 
 export interface BacktestResponse {

@@ -238,3 +238,48 @@ def test_backup_version_1_without_plans_is_still_readable() -> None:
            "deleted_at": None}
     old = {"format": "compass-journal", "version": 1, "exported_at": 1, "entries": [rec]}
     assert j.restore_backup(old)["added"] == 1
+
+
+# --- бэктест со стопом, целью и размером по риску через API ---
+
+
+def _wavy() -> list[float]:
+    import math
+
+    return [100 + 12 * math.sin(i / 6) + i * 0.05 for i in range(300)]
+
+
+def test_backtest_api_with_rules_reports_rules_assumptions_and_exit_reasons(env: Env) -> None:
+    env.adapter.data["SBER"] = day_candles(_wavy())
+    env.now[0] = 10_000 * DAY
+    c = client(env)
+    base = {"market": "moex", "symbol": "SBER", "strategy": "sma_cross", "params": {"fast": 5, "slow": 20}, "limit": 300}
+    plain = c.post("/api/backtest", json=base).json()
+    assert plain["run_card"]["rules"] is None and plain["run_card"]["engine_version"] == "3"
+    assert any("стоп-лоссов нет" in a for a in plain["run_card"]["assumptions"])
+
+    r = c.post("/api/backtest", json={**base, "stop_atr_mult": 2.0, "target_r": 3.0, "risk_pct": 1.0})
+    assert r.status_code == 200
+    body = r.json()
+    card = body["run_card"]
+    assert card["rules"]["stop_atr_mult"] == 2.0 and card["rules"]["lot"] == 10  # лот берётся у инструмента
+    assert any("стоп на 2·ATR" in a for a in card["assumptions"]) and any("гэп" in a for a in card["assumptions"])
+    assert not any("стоп-лоссов нет" in a for a in card["assumptions"])
+    assert {"stops", "targets", "gap_exits", "ambiguous_bars", "skipped_entries"} <= set(body["metrics"])
+    reasons = {t["exit_reason"] for t in body["trades"]}
+    assert reasons <= {"signal", "stop", "gap_stop", "target", "gap_target", "open"} and reasons - {"signal", "open"}
+    assert all(t["qty"] % 10 == 0 for t in body["trades"] if t["qty"])  # лот 10 из инструмента
+    risks = [t["risk_amount"] for t in body["trades"] if t["risk_amount"]]
+    top = max(x["v"] for x in body["equity"])
+    assert risks and max(risks) <= 0.01 * top * 1.0001  # риск на сделку — не больше 1% капитала на тот момент
+
+
+def test_backtest_api_rejects_inconsistent_rules(env: Env) -> None:
+    env.adapter.data["SBER"] = day_candles(_wavy())
+    env.now[0] = 10_000 * DAY
+    c = client(env)
+    base = {"market": "moex", "symbol": "SBER", "strategy": "sma_cross", "limit": 300}
+    assert c.post("/api/backtest", json={**base, "risk_pct": 1.0}).status_code == 422  # риск без стопа
+    assert c.post("/api/backtest", json={**base, "target_r": 2.0}).status_code == 422  # цель без стопа
+    assert c.post("/api/backtest", json={**base, "stop_atr_mult": 0}).status_code == 422
+    assert c.post("/api/backtest", json={**base, "stop_atr_mult": 2.0, "risk_pct": 150}).status_code == 422

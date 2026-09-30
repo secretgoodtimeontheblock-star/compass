@@ -20,7 +20,7 @@ from compass import __version__
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
-from compass.backtest import backtest
+from compass.backtest import Rules, backtest
 from compass.cache import CandleCache
 from compass.data_quality import check_candles
 from compass.journal import MODES, Entry, Journal
@@ -121,6 +121,10 @@ class BacktestRequest(BaseModel):
     capital: float = 100_000.0
     fee_pct: float = 0.05
     slippage_pct: float = 0.05
+    # стопы, цели и размер по риску; всё пусто — прежний режим «весь капитал, выход по сигналу»
+    stop_atr_mult: float | None = Field(None, gt=0, le=20)
+    target_r: float | None = Field(None, gt=0, le=50)
+    risk_pct: float | None = Field(None, gt=0, le=100)
 
 
 class RiskRequest(BaseModel):
@@ -263,7 +267,20 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 закрытых свечей)")
         quality = check_candles(candles, req.market, req.tf)
         df = candles_to_df(candles)
-        bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct)
+        rules = None
+        if req.stop_atr_mult is not None or req.target_r is not None or req.risk_pct is not None:
+            rules = Rules(stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct)
+            rules.check()
+            info = instrument_info(req.market, req.symbol)
+            bond = info.price_unit == "percent_of_face"
+            if bond and not info.face_value:
+                raise ValueError("Для облигации не получен номинал: посчитать размер по риску нельзя")
+            rules = Rules(
+                stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct, lot=info.lot,
+                qty_step=(info.qty_step or CRYPTO_QTY_STEP) if req.market == "crypto" else None,
+                unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
+            )
+        bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct, rules)
         ts = df["ts"].to_numpy()
         eq = np.array([v for _, v in bt.equity])
         metrics, warnings = apply_sample_rules(
@@ -275,6 +292,19 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         )
         if open_dropped:
             warnings.append("Последняя свеча ещё не закрыта и в расчёт не входит.")
+        m = bt.metrics
+        if m.get("ambiguous_bars"):
+            warnings.append(
+                f"В {m['ambiguous_bars']} свечах достигнуты и стоп, и цель: порядок внутри свечи неизвестен, "
+                "принят стоп (консервативно)."
+            )
+        if m.get("gap_exits"):
+            warnings.append(f"Выходов по гэпу: {m['gap_exits']}. Исполнение было хуже уровня стопа.")
+        if m.get("skipped_entries"):
+            warnings.append(
+                f"Вход по сигналу пропущен {m['skipped_entries']} раз: открытие уже ниже стопа, "
+                "идёт прогрев ATR или размер по риску округлился до нуля."
+            )
         return {
             "strategy": strat.id,
             "params": params,
@@ -306,6 +336,11 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 slippage_pct=req.slippage_pct,
                 stale=res.stale,
                 strategy_version=strategy_version(strat, params),
+                rules=None if rules is None else {
+                    "stop_atr_mult": rules.stop_atr_mult, "target_r": rules.target_r, "risk_pct": rules.risk_pct,
+                    "atr_period": rules.atr_period, "lot": rules.lot, "qty_step": rules.qty_step,
+                    "unit_value": rules.unit_value,
+                },
             ),
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],

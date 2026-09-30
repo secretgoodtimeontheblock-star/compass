@@ -18,12 +18,15 @@ import pandas as pd
 
 from compass.backtest import BacktestResult, Trade
 
-ENGINE_VERSION = "2"  # менять при любом изменении правил исполнения в backtest.py
+ENGINE_VERSION = "3"  # менять при любом изменении правил исполнения в backtest.py
 _MS_PER_YEAR = 365.25 * 86_400_000
 _MIN_YEARS_FOR_RATIOS = 60 / 365.25  # на коротком периоде годовые коэффициенты вводят в заблуждение
 _MIN_TRADES_MC = 5
 MIN_TRADES_FOR_STATS = 10  # меньше — доля прибыльных и коэффициенты почти ничего не говорят
-_SAMPLE_DEPENDENT = ("win_rate_pct", "avg_trade_pct", "profit_factor", "payoff_ratio", "sharpe", "sortino", "calmar", "cagr_pct")
+_SAMPLE_DEPENDENT = (
+    "win_rate_pct", "avg_trade_pct", "avg_win_pct", "avg_loss_pct", "avg_r", "avg_mae_pct", "avg_mfe_pct",
+    "profit_factor", "payoff_ratio", "sharpe", "sortino", "calmar", "cagr_pct",
+)
 _MIN_BARS_PER_WINDOW = 20
 
 
@@ -179,6 +182,7 @@ def run_card(
     slippage_pct: float,
     stale: bool,
     strategy_version: str | None = None,
+    rules: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Всё, что нужно, чтобы повторить расчёт и понять, совпадает ли он с прежним."""
     return {
@@ -198,10 +202,9 @@ def run_card(
         "data_hash": data_fingerprint(df),
         "data_stale": stale,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "rules": rules,
         "assumptions": [
-            "long/flat, без плеча, весь капитал в сделку",
-            "решение на закрытии свечи, исполнение по открытию следующей",
-            "стоп-лоссов нет, ликвидность не учитывается",
+            *_execution_assumptions(rules),
             "безрисковая ставка 0 в Sharpe/Sortino",
             "ценовой ряд без поправок на сплиты и без дивидендов/купонов: это ценовая доходность, не полная",
         ],
@@ -222,3 +225,23 @@ def apply_sample_rules(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[st
         "Sharpe, Sortino и Calmar не показываются: при такой выборке они случайны."
     )
     return out, [note]
+
+
+def _execution_assumptions(rules: dict[str, Any] | None) -> list[str]:
+    out = ["long/flat, без плеча", "решение на закрытии свечи, исполнение по открытию следующей"]
+    if not rules:
+        return [*out, "весь капитал в сделку, стоп-лоссов нет, ликвидность не учитывается"]
+    if rules.get("risk_pct"):
+        out.append(f"размер по риску {rules['risk_pct']:g}% текущего капитала, с округлением до лота/шага")
+    else:
+        out.append("весь капитал в сделку")
+    out.append(f"стоп на {rules['stop_atr_mult']:g}·ATR({rules.get('atr_period', 14)}) от закрытия сигнальной свечи")
+    if rules.get("target_r"):
+        out.append(f"цель {rules['target_r']:g}R от входа")
+    out += [
+        "открытие за стопом (гэп) — выход по открытию, хуже уровня стопа",
+        "стоп и цель в одной свече — принят стоп (порядок внутри свечи неизвестен)",
+        "исполнение по стопу и по цели — с проскальзыванием (консервативно), ликвидность не учитывается",
+        "после выхода по стопу/цели повторный вход только по новому сигналу",
+    ]
+    return out

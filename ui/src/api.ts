@@ -91,6 +91,9 @@ export const api = {
     capital: number;
     fee_pct: number;
     slippage_pct: number;
+    stop_atr_mult?: number;
+    target_r?: number;
+    risk_pct?: number;
   }) => request<BacktestResponse>("/api/backtest", json("POST", body)),
 
   signals: (p: { limit?: number; unseen?: boolean; market?: MarketId; symbol?: string } = {}) =>

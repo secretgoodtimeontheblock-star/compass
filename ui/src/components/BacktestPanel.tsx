@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtDate, fmtNum, fmtPct, fmtPrice, pnlClass } from "../lib/format";
-import type { BacktestResponse, Instrument, Settings, Strategy } from "../types";
+import type { BacktestResponse, Instrument, Settings, Strategy, Trade } from "../types";
 import { EquityChart } from "./EquityChart";
 
 interface Props {
@@ -18,6 +18,10 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   const [params, setParams] = useState<Record<string, number>>({});
   const [capital, setCapital] = useState(100_000);
   const [depth, setDepth] = useState(1000);
+  const [useStop, setUseStop] = useState(false);
+  const [stopMult, setStopMult] = useState("2");
+  const [targetR, setTargetR] = useState("");
+  const [riskPct, setRiskPct] = useState("1");
   const [fee, setFee] = useState(0.05);
   const [slip, setSlip] = useState(0.05);
   const [res, setRes] = useState<BacktestResponse>();
@@ -82,6 +86,13 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           capital,
           fee_pct: fee,
           slippage_pct: slip,
+          ...(useStop
+            ? {
+                stop_atr_mult: Number(stopMult),
+                target_r: targetR ? Number(targetR) : undefined,
+                risk_pct: riskPct ? Number(riskPct) : undefined,
+              }
+            : {}),
         }),
       );
     } catch (e) {
@@ -195,6 +206,26 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           </button>
         )}
         {savedNote && <p className="notice full">{savedNote}</p>}
+        <label className="field full" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <input type="checkbox" checked={useStop} onChange={(e) => setUseStop(e.target.checked)} />
+          <span>Со стопом и размером по риску (иначе весь капитал, выход по сигналу)</span>
+        </label>
+        {useStop && (
+          <>
+            <label className="field">
+              <span>Стоп (× ATR)</span>
+              <input type="number" min={0.1} max={20} step="any" value={stopMult} onChange={(e) => setStopMult(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Цель (× риск, необязательно)</span>
+              <input type="number" min={0.1} max={50} step="any" value={targetR} onChange={(e) => setTargetR(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Риск на сделку, %</span>
+              <input type="number" min={0.01} max={100} step="any" value={riskPct} onChange={(e) => setRiskPct(e.target.value)} />
+            </label>
+          </>
+        )}
         <label className="field full">
           <span>Глубина истории (свечей)</span>
           <select value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
@@ -244,6 +275,14 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             <Metric label="Sortino" value={m.sortino == null ? "—" : fmtNum(m.sortino)} />
             <Metric label="Calmar" value={m.calmar == null ? "—" : fmtNum(m.calmar)} />
             <Metric label="Серия убытков подряд" value={String(m.max_consecutive_losses)} />
+            {res!.run_card.rules && (
+              <>
+                <Metric label="Средняя сделка, R" value={m.avg_r == null ? "—" : fmtNum(m.avg_r)} cls={pnlClass(m.avg_r)} />
+                <Metric label="Выходов по стопу / цели" value={`${m.stops} / ${m.targets}`} />
+                <Metric label="Худший ход против позиции" value={m.avg_mae_pct == null ? "—" : fmtPct(m.avg_mae_pct, 2, false)} />
+                <Metric label="Лучший ход в пользу" value={m.avg_mfe_pct == null ? "—" : fmtPct(m.avg_mfe_pct, 2, false)} />
+              </>
+            )}
           </div>
           <p className="caveat" style={{ marginBottom: 0 }}>
             {beat >= 0 ? "Стратегия обошла" : "Стратегия уступила"} «купил и держи» на{" "}
@@ -263,6 +302,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
                 <th>Выход</th>
                 <th className="r">Цена</th>
                 <th className="r">Итог</th>
+                <th>Как вышли</th>
               </tr>
             </thead>
             <tbody>
@@ -276,6 +316,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
                     <td>{t.exit_ts ? fmtDate(t.exit_ts) : <span className="muted">открыта</span>}</td>
                     <td className="r">{fmtPrice(t.exit_price)}</td>
                     <td className={`r ${pnlClass(t.pnl_pct)}`}>{fmtPct(t.pnl_pct * 100)}</td>
+                    <td className="muted">{EXIT_LABEL[t.exit_reason]}</td>
                   </tr>
                 ))}
             </tbody>
@@ -284,12 +325,27 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
       )}
       <p className="caveat">
         В этом расчёте комиссия {fee}% и проскальзывание {slip}% на каждую сторону сделки. Проверка на
-        истории показывает, как правило работало раньше, и не гарантирует будущий результат. В расчёте нет
-        стоп-лоссов, торговля только в покупку, без плеча, весь капитал в каждой сделке.
+        истории показывает, как правило работало раньше, и не гарантирует будущий результат.
       </p>
+      {res && (
+        <ul className="caveat" style={{ paddingLeft: 18 }}>
+          {res.run_card.assumptions.map((a) => (
+            <li key={a}>{a}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
+
+const EXIT_LABEL: Record<Trade["exit_reason"], string> = {
+  signal: "по сигналу",
+  stop: "стоп",
+  gap_stop: "стоп с гэпом",
+  target: "цель",
+  gap_target: "цель с гэпом",
+  open: "открыта",
+};
 
 function Metric({ label, value, cls = "" }: { label: string; value: string; cls?: string }) {
   return (
