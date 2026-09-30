@@ -25,6 +25,8 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   const [riskPct, setRiskPct] = useState("1");
   const [fee, setFee] = useState(0.05);
   const [slip, setSlip] = useState(0.05);
+  const [closeEod, setCloseEod] = useState(false);
+  const intraday = INTRADAY.includes(tf);
   const [res, setRes] = useState<BacktestResponse>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -82,6 +84,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
     capital,
     fee_pct: fee,
     slippage_pct: slip,
+    ...(closeEod && intraday ? { close_eod: true } : {}),
     ...(useStop
       ? {
           stop_atr_mult: Number(stopMult),
@@ -226,6 +229,18 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           </button>
         )}
         {savedNote && <p className="notice full">{savedNote}</p>}
+        {intraday && (
+          <>
+            <label className="field full" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+              <input type="checkbox" checked={closeEod} onChange={(e) => setCloseEod(e.target.checked)} />
+              <span>Закрывать позицию к концу дня, не держать через ночь</span>
+            </label>
+            <p className="notice full">
+              Внутридневная проверка: расходы и проскальзывание решают всё, а в свечах не видны спред и очередь заявок.
+              Комиссия и слипаж здесь стоит проверить с запасом. История на минутных свечах — это дни, а не годы.
+            </p>
+          </>
+        )}
         <label className="field full" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
           <input type="checkbox" checked={useStop} onChange={(e) => setUseStop(e.target.checked)} />
           <span>Со стопом и размером по риску (иначе весь капитал, выход по сигналу)</span>
@@ -249,7 +264,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
         <label className="field full">
           <span>Глубина истории (свечей)</span>
           <select value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
-            {[500, 1000, 2500, 5000].map((n) => (
+            {(intraday ? [1000, 5000, 10000, 20000] : [500, 1000, 2500, 5000]).map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
@@ -277,6 +292,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             : "Запрошенная глубина набрана целиком: более ранняя история может существовать, выберите глубже."}
         </div>
       )}
+      {res?.intraday && <IntradayBlock ib={res.intraday} />}
       {res?.warnings.map((w) => (
         <div key={w} className="notice">{w}</div>
       ))}
@@ -359,7 +375,10 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   );
 }
 
+const INTRADAY = ["1m", "5m", "10m", "15m"];
+
 const EXIT_LABEL: Record<Trade["exit_reason"], string> = {
+  eod: "конец дня",
   signal: "по сигналу",
   stop: "стоп",
   gap_stop: "стоп с гэпом",
@@ -436,5 +455,38 @@ function Robustness({ res }: { res: BacktestResponse }) {
         версия движка {card.engine_version}, {card.candles} свечей, отпечаток данных {card.data_hash}.
       </p>
     </>
+  );
+}
+
+function IntradayBlock({ ib }: { ib: NonNullable<BacktestResponse["intraday"]> }) {
+  return (
+    <div className="card" style={{ margin: "6px 12px" }}>
+      <b>Внутридневной режим</b>
+      <div className="muted num">
+        Торговых дней в истории: {ib.trading_days}
+        {ib.trades_per_day != null ? ` · сделок в день: ${ib.trades_per_day}` : ""} · расходы на круг сделки:{" "}
+        {fmtNum(ib.round_trip_cost_pct, 2)}%
+      </div>
+      <table className="num">
+        <thead>
+          <tr>
+            <th>Расходы</th>
+            <th className="r">Доходность</th>
+            <th className="r">Сделок</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ib.cost_stress.map((x) => (
+            <tr key={x.multiplier}>
+              <td>
+                ×{x.multiplier} (комиссия {fmtNum(x.fee_pct, 3)}%, слипаж {fmtNum(x.slippage_pct, 3)}%)
+              </td>
+              <td className={`r ${pnlClass(x.return_pct)}`}>{fmtPct(x.return_pct)}</td>
+              <td className="r">{x.trades}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

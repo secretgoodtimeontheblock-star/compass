@@ -9,6 +9,7 @@ from typing import Protocol
 
 import httpx
 
+from compass.models import feed_delay_s
 from compass.signals import Signal
 from compass.strategies import STRATEGIES
 
@@ -26,7 +27,9 @@ def format_signal(s: Signal) -> str:
     else:
         head = f"🔴 Сигнал на ВЫХОД: {s.symbol} ({s.tf})"
         body = f"Цена закрытия: {s.price:g}"
-    return f"{head}\nСтратегия: {name}\n{body}\n{DISCLAIMER}"
+    delay = feed_delay_s(s.market, s.tf)
+    late = f"\n⚠ Данные с задержкой ~{delay // 60} мин: цена на бирже уже могла уйти." if delay else ""
+    return f"{head}\nСтратегия: {name}\n{body}{late}\n{DISCLAIMER}"
 
 
 def format_digest(signals: list[Signal]) -> str:

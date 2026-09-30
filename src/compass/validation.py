@@ -231,6 +231,10 @@ def _execution_assumptions(rules: dict[str, Any] | None) -> list[str]:
     out = ["long/flat, без плеча", "решение на закрытии свечи, исполнение по открытию следующей"]
     if not rules:
         return [*out, "весь капитал в сделку, стоп-лоссов нет, ликвидность не учитывается"]
+    if rules.get("close_eod"):
+        out.append("позиции закрываются к концу торгового дня по закрытию последней свечи; на ней же входов нет")
+    if not rules.get("stop_atr_mult"):
+        return [*out, "весь капитал в сделку, стоп-лоссов нет, ликвидность не учитывается"]
     if rules.get("risk_pct"):
         out.append(f"размер по риску {rules['risk_pct']:g}% текущего капитала, с округлением до лота/шага")
     else:
@@ -245,3 +249,15 @@ def _execution_assumptions(rules: dict[str, Any] | None) -> list[str]:
         "после выхода по стопу/цели повторный вход только по новому сигналу",
     ]
     return out
+
+
+def cost_stress_warning(stress: list[dict[str, Any]]) -> str | None:
+    """Стратегия в плюсе при обычных расходах и не в плюсе при втрое больших: держится на идеальном исполнении."""
+    base = next((x for x in stress if x["multiplier"] == 1), None)
+    worst = next((x for x in stress if x["multiplier"] == 3), None)
+    if base and worst and base["return_pct"] > 0 >= worst["return_pct"]:
+        return (
+            "При расходах втрое выше результат уходит в минус: стратегия живёт за счёт исполнения, а на практике "
+            "спред и очередь заявок в свечах не видны."
+        )
+    return None

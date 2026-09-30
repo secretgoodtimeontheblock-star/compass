@@ -165,3 +165,54 @@ def test_default_mode_is_unchanged_by_rules_none() -> None:
     assert a.equity == b.equity and a.trades == b.trades
     (t,) = a.trades
     assert t.exit_reason == "signal" and t.stop is None and t.risk_amount is None
+
+
+# --- внутридневной режим: не держать позицию через ночь ---
+
+H = 3_600_000
+
+
+def hourly(n_after: int, close_shift=None) -> pd.DataFrame:
+    rows = [(100.0, 101.0, 99.0, 100.0)] * (FLAT + n_after)
+    if close_shift:
+        rows = [(o, h, low, c + close_shift.get(i, 0.0)) for i, (o, h, low, c) in enumerate(rows)]
+    return pd.DataFrame(
+        {"ts": [i * H for i in range(len(rows))], "open": [r[0] for r in rows], "high": [r[1] for r in rows],
+         "low": [r[2] for r in rows], "close": [r[3] for r in rows], "volume": 1.0}
+    )
+
+
+def eod_run(n_after=40, tz=0, eod=True, slip=0.0, shift=None):
+    df = hourly(n_after, shift)
+    tgt = pd.Series([0] * (FLAT - 1) + [1] * (len(df) - FLAT + 1))
+    return backtest(df, tgt, 100_000.0, 0.0, slip, Rules(stop_atr_mult=2.0, close_eod=eod, tz_offset_ms=tz))
+
+
+def test_close_eod_exits_at_last_bar_close_and_never_holds_overnight() -> None:
+    res = eod_run(shift={23: 1.5})
+    first = res.trades[0]
+    assert (first.entry_ts, first.exit_ts, first.exit_reason) == (20 * H, 23 * H, "eod")  # последняя свеча суток — 23:00
+    assert first.exit_price == pytest.approx(101.5)  # закрытие этой свечи
+    assert res.metrics["eod_exits"] >= 1
+    for t in res.trades:
+        if t.exit_ts is not None:
+            assert t.entry_ts // (24 * H) == t.exit_ts // (24 * H)  # вход и выход в одни сутки
+    second = res.trades[1]
+    assert second.entry_ts == 25 * H  # решение на закрытии 00:00 (свеча 24) → вход по открытию свечи 25; на свече 23 входа нет
+
+
+def test_close_eod_respects_timezone_offset_and_applies_slippage() -> None:
+    res = eod_run(tz=3 * H, slip=0.1)  # московские сутки: граница между 20:00 и 21:00 UTC
+    t = res.trades[0]
+    assert t.entry_ts == 20 * H and t.exit_ts == 20 * H and t.exit_reason == "eod" and t.bars == 0
+    assert t.exit_price == pytest.approx(100 * 0.999)  # закрытие со слипом
+
+
+def test_without_close_eod_positions_are_held_overnight() -> None:
+    res = eod_run(eod=False)
+    assert res.metrics["eod_exits"] == 0 and len(res.trades) == 1 and res.trades[0].exit_reason == "open"
+
+
+def test_close_eod_rejects_absurd_timezone() -> None:
+    with pytest.raises(ValueError):
+        Rules(stop_atr_mult=2.0, tz_offset_ms=15 * H).check()

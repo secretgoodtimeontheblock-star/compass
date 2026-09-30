@@ -65,6 +65,8 @@ export interface Signal {
   seen: boolean;
   status: "active" | "expired" | "acted" | "dismissed";
   expires_at: number; // мс
+  delay_seconds: number;
+  late: boolean;
   notified_at: number | null;
   dismissed_at: number | null;
 }
@@ -85,6 +87,7 @@ export interface WatchStatus {
   last_scan_at: number | null;
   next_scan_at: number | null;
   quiet_hours: { enabled: boolean; from: string; to: string; active_now: boolean };
+  warnings: string[];
   signal_valid_bars: number;
   instruments: WatchInstrument[];
   notes: string[];
@@ -111,7 +114,7 @@ export interface Trade {
   exit_ts: number | null;
   exit_price: number | null;
   pnl_pct: number;
-  exit_reason: "signal" | "stop" | "gap_stop" | "target" | "gap_target" | "open";
+  exit_reason: "signal" | "stop" | "gap_stop" | "target" | "gap_target" | "eod" | "open";
   qty: number;
   stop: number | null;
   target: number | null;
@@ -200,6 +203,14 @@ export interface BacktestResponse {
   run_card: RunCard;
   data_quality: DataQuality;
   warnings: string[];
+  intraday: {
+    tf: string;
+    trading_days: number;
+    trades_per_day: number | null;
+    round_trip_cost_pct: number;
+    feed_delay_seconds: number;
+    cost_stress: { multiplier: number; fee_pct: number; slippage_pct: number; return_pct: number; trades: number }[];
+  } | null;
   coverage: { requested: number; candles: number; first_ts: number; last_ts: number; exhausted: boolean };
   trades: Trade[];
   equity: { t: number; v: number }[];
@@ -391,6 +402,7 @@ export interface BacktestRequestBody {
   stop_atr_mult?: number;
   target_r?: number;
   risk_pct?: number;
+  close_eod?: boolean;
 }
 
 export interface OosSegment {

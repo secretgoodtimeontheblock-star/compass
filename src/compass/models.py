@@ -65,3 +65,13 @@ def closed_candles(candles: Sequence[Candle], tf: str, now_ms: int) -> list[Cand
     считается закрытой по окончании календарных суток по Москве."""
     cutoff = now_ms - TIMEFRAME_MS[tf]
     return [c for c in candles if c.ts <= cutoff]
+
+
+# Бесплатные котировки МосБиржи (ISS) идут с задержкой ~15 минут: для дневных свечей это неважно, для внутридневных — критично.
+FEED_DELAY_S = {"moex": 900}
+INTRADAY_TFS = ("1m", "5m", "10m", "15m")  # таймфреймы «скальпинг и внутридневная торговля»
+
+
+def feed_delay_s(market: str, tf: str) -> int:
+    """Задержка данных в секундах для внутридневных таймфреймов рынка (0 — данные без известной задержки)."""
+    return FEED_DELAY_S.get(market, 0) if TIMEFRAME_MS.get(tf, 86_400_000) < TIMEFRAME_MS["1d"] else 0

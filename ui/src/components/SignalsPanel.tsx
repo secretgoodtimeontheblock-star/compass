@@ -142,6 +142,11 @@ function SignalCard({
       <div className="muted" style={{ fontSize: 12 }}>
         {STATUS_LABEL[s.status]}
         {s.status === "active" ? ` до ${fmtDateTime(s.expires_at)}` : ""}
+        {s.late && (
+          <span className="down" style={{ marginLeft: 6 }} title="Данные приходят позже, чем живёт сигнал">
+            ⚠ данные с задержкой ~{Math.round(s.delay_seconds / 60)} мин
+          </span>
+        )}
         {s.status === "dismissed" ? (
           <button className="btn ghost small" style={{ marginLeft: 6 }} onClick={() => void act(api.restoreSignal)}>
             Вернуть

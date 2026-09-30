@@ -16,6 +16,9 @@ i+1 — так же, как будет в жизни: сигнал видно т
 - в одной свече достигнуты и стоп, и цель — принимается СТОП (консервативно), свеча считается неоднозначной;
 - после выхода по стопу/цели повторный вход возможен только после нового сигнала (цель стратегии
   должна сначала стать «вне рынка»), иначе тут же вернулись бы в сделку, которую только что закрыли.
+- close_eod (внутридневная торговля): позиция закрывается по закрытию последней свечи торгового дня (по времени рынка,
+  со слипом), а на последней свече дня новых входов нет — ночь и гэп открытия остаются вне позиции. День определяется
+  сдвигом `tz_offset_ms` (МосБиржа — московские сутки, крипта — UTC); сессии и клиринг биржи не моделируются.
 - если открытие для входа уже ниже стопа (или размер по риску округлился до нуля), вход пропускается и
   считается в `skipped_entries`; пока стратегия держит «в рынке», попытка повторяется на следующей свече.
 
@@ -65,8 +68,12 @@ class Rules:
     lot: int = 1
     qty_step: float | None = None
     unit_value: float = 1.0  # деньги за единицу цены на бумагу (облигации: номинал/100)
+    close_eod: bool = False  # закрывать позицию к концу торгового дня и не входить на последней свече дня
+    tz_offset_ms: int = 0  # сдвиг от UTC для границы суток
 
     def check(self) -> None:
+        if abs(self.tz_offset_ms) > 14 * 3_600_000:
+            raise ValueError("Сдвиг времени суток — не больше 14 часов")
         if self.target_r is not None and self.stop_atr_mult is None:
             raise ValueError("Цель в R невозможна без стопа")
         if self.risk_pct is not None and self.stop_atr_mult is None:
@@ -129,7 +136,9 @@ def backtest(
     trades: list[Trade] = []
     equity: list[tuple[int, float]] = []
     bars_in_market = 0
-    counters = {"stops": 0, "targets": 0, "gap_exits": 0, "ambiguous_bars": 0, "skipped_entries": 0}
+    counters = {"stops": 0, "targets": 0, "gap_exits": 0, "ambiguous_bars": 0, "skipped_entries": 0, "eod_exits": 0}
+    day_id = (ts.astype(np.int64) + rules.tz_offset_ms) // 86_400_000
+    last_of_day = np.append(day_id[1:] != day_id[:-1], True)
 
     def close_position(i: int, price: float, reason: str) -> None:
         nonlocal cash, qty
@@ -209,6 +218,10 @@ def backtest(
                 if qty == 0:
                     blocked = True
 
+        if rules.close_eod and last_of_day[i] and qty > 0:
+            counters["eod_exits"] += 1
+            close_position(i, closes[i] * (1 - slip), "eod")
+
         if qty > 0:
             bars_in_market += 1
         equity.append((int(ts[i]), cash + qty * closes[i] * uv))
@@ -216,7 +229,7 @@ def backtest(
         if i < n - 1:  # на последней свече заявку исполнять уже нечем
             if tgt[i] == 0:
                 blocked = False
-            if tgt[i] == 1 and qty == 0 and not blocked:
+            if tgt[i] == 1 and qty == 0 and not blocked and not (rules.close_eod and last_of_day[i]):
                 pending = "buy"
             elif tgt[i] == 0 and qty > 0:
                 pending = "sell"

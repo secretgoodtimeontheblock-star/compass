@@ -100,6 +100,11 @@ function WatchLine({ w }: { w: WatchStatus }) {
           {w.quiet_hours.active_now ? ": сейчас действуют, уведомления откладываются" : ""}
         </div>
       )}
+      {w.warnings.map((x) => (
+        <div className="notice" key={x} style={{ marginTop: 4 }}>
+          {x}
+        </div>
+      ))}
       <p className="caveat" style={{ margin: "4px 0 0" }}>{w.notes[0]}</p>
     </div>
   );

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from compass import __version__, oos, portfolio
 from compass import review_week as review_week_mod
 from compass import screener as screener_mod
-from compass.accounts import Account, AccountStore
+from compass.accounts import MARKET_TZ, Account, AccountStore
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
@@ -32,7 +32,14 @@ from compass.journal import MODES, Entry, Journal
 from compass.levels import Level, LevelStore
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
-from compass.models import Instrument, InstrumentInfo, closed_candles
+from compass.models import (
+    INTRADAY_TFS,
+    TIMEFRAME_MS,
+    Instrument,
+    InstrumentInfo,
+    closed_candles,
+    feed_delay_s,
+)
 from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
 from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
@@ -50,6 +57,7 @@ from compass.signals import (
 from compass.strategies import STRATEGIES, candles_to_df, strategy_version
 from compass.validation import (
     apply_sample_rules,
+    cost_stress_warning,
     risk_ratios,
     run_card,
     trade_resampling,
@@ -143,7 +151,7 @@ class BacktestRequest(BaseModel):
     tf: str = "1d"
     strategy: str
     params: dict[str, int] = Field(default_factory=dict)
-    limit: int = Field(1000, ge=10, le=5000)
+    limit: int = Field(1000, ge=10, le=20000)  # для внутридневных таймфреймов нужна история глубже 5000 свечей
     capital: float = 100_000.0
     fee_pct: float = 0.05
     slippage_pct: float = 0.05
@@ -151,6 +159,7 @@ class BacktestRequest(BaseModel):
     stop_atr_mult: float | None = Field(None, gt=0, le=20)
     target_r: float | None = Field(None, gt=0, le=50)
     risk_pct: float | None = Field(None, gt=0, le=100)
+    close_eod: bool = False  # внутридневная торговля: закрывать позицию к концу торгового дня
 
 
 class ValidateRequest(BacktestRequest):
@@ -223,7 +232,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
 
     @app.get("/api/candles")
     def candles(
-        market: str, symbol: str, tf: str = "1d", limit: int = Query(500, ge=1, le=5000)
+        market: str, symbol: str, tf: str = "1d", limit: int = Query(500, ge=1, le=20000)
     ) -> dict:
         adapter(market)
         res = svc.cache.get(market, symbol, tf, limit)
@@ -292,9 +301,13 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         return res, candles_to_df(candles), len(candles) < len(res.candles), check_candles(candles, req.market, req.tf)
 
     def make_rules(req: BacktestRequest) -> Rules | None:
-        if req.stop_atr_mult is None and req.target_r is None and req.risk_pct is None:
+        if req.stop_atr_mult is None and req.target_r is None and req.risk_pct is None and not req.close_eod:
             return None
-        Rules(stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct).check()
+        tz_ms = int(MARKET_TZ[req.market].utcoffset(None).total_seconds() * 1000) if req.market in MARKET_TZ else 0
+        Rules(stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct, close_eod=req.close_eod,
+              tz_offset_ms=tz_ms).check()
+        if req.stop_atr_mult is None and req.risk_pct is None:
+            return Rules(close_eod=req.close_eod, tz_offset_ms=tz_ms)
         info = instrument_info(req.market, req.symbol)
         bond = info.price_unit == "percent_of_face"
         if bond and not info.face_value:
@@ -303,6 +316,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct, lot=info.lot,
             qty_step=(info.qty_step or CRYPTO_QTY_STEP) if req.market == "crypto" else None,
             unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
+            close_eod=req.close_eod, tz_offset_ms=tz_ms,
         )
 
     def rules_dict(rules: Rules | None) -> dict | None:
@@ -311,6 +325,42 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         return {
             "stop_atr_mult": rules.stop_atr_mult, "target_r": rules.target_r, "risk_pct": rules.risk_pct,
             "atr_period": rules.atr_period, "lot": rules.lot, "qty_step": rules.qty_step, "unit_value": rules.unit_value,
+            "close_eod": rules.close_eod,
+        }
+
+    def intraday_block(req, strat, params, df, rules, bt, warnings: list[str]) -> dict:
+        """Скальпинг и внутридневная торговля: расходы решают, история коротка, а МосБиржа отдаёт данные с опозданием."""
+        tz = MARKET_TZ.get(req.market)
+        off = int(tz.utcoffset(None).total_seconds() * 1000) if tz else 0
+        ts = df["ts"].to_numpy().astype("int64")
+        days = len(set(((ts + off) // 86_400_000).tolist()))
+        target = strat.target(df, params)
+        cost = 2 * (req.fee_pct + req.slippage_pct)
+        stress = []
+        for mult in (1, 2, 3):
+            r = bt if mult == 1 else backtest(df, target, req.capital, req.fee_pct * mult, req.slippage_pct * mult, rules)
+            stress.append({"multiplier": mult, "fee_pct": round(req.fee_pct * mult, 4),
+                           "slippage_pct": round(req.slippage_pct * mult, 4),
+                           "return_pct": r.metrics["total_return_pct"], "trades": r.metrics["trades"]})
+        n = bt.metrics["trades"]
+        if days < 20:
+            warnings.append(
+                f"История покрывает {days} торговых дней: для внутридневной стратегии этого мало, результат может быть случайным."
+            )
+        fragile = cost_stress_warning(stress)
+        if fragile:
+            warnings.append(fragile)
+        if not req.close_eod:
+            warnings.append("Позиции удерживаются через ночь: для внутридневной торговли включите закрытие к концу дня.")
+        delay = feed_delay_s(req.market, req.tf)
+        if delay:
+            warnings.append(
+                f"Котировки {req.market.upper()} идут с задержкой ~{delay // 60} мин: на таймфрейме {req.tf} реальный "
+                "сигнал придёт с опозданием, эту проверку нельзя считать применимой к скальпингу."
+            )
+        return {
+            "tf": req.tf, "trading_days": days, "trades_per_day": round(n / days, 2) if days else None,
+            "round_trip_cost_pct": round(cost, 4), "cost_stress": stress, "feed_delay_seconds": delay,
         }
 
     @app.post("/api/backtest")
@@ -335,6 +385,9 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         if open_dropped:
             warnings.append("Последняя свеча ещё не закрыта и в расчёт не входит.")
         m = bt.metrics
+        intraday = None
+        if req.tf in INTRADAY_TFS:
+            intraday = intraday_block(req, strat, params, df, rules, bt, warnings)
         if m.get("ambiguous_bars"):
             warnings.append(
                 f"В {m['ambiguous_bars']} свечах достигнуты и стоп, и цель: порядок внутри свечи неизвестен, "
@@ -354,6 +407,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "metrics": metrics,
             "data_quality": quality,
             "warnings": warnings,
+            "intraday": intraday,
             "coverage": {
                 "requested": req.limit,
                 "candles": len(df),
@@ -510,6 +564,10 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         d = asdict(s)
         d["status"] = signal_status(s, ctx["now"], ctx["valid"], s.id in ctx["acted"])
         d["expires_at"] = signal_expires_at(s, ctx["valid"])
+        delay = feed_delay_s(s.market, s.tf)
+        d["delay_seconds"] = delay
+        # данные приходят позже, чем живёт сигнал: к моменту получения он уже мог устареть
+        d["late"] = bool(delay) and delay * 1000 >= TIMEFRAME_MS[s.tf] * ctx["valid"]
         return d
 
     @app.get("/api/watch")
@@ -529,7 +587,22 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "message": "" if not st else st["message"], "last_scan_at": st and st["last_scan_at"],
                 "last_ok_at": st and st["last_ok_at"],
             })
+        warns = []
+        for mk in ("moex", "crypto"):
+            tfm = cfg.get(f"tf_{mk}")
+            if tfm is None:
+                continue
+            window_ms = TIMEFRAME_MS[tfm] * cfg["signal_valid_bars"]
+            if cfg["scan_interval_min"] * 60_000 > window_ms:
+                warns.append(
+                    f"Рынок {mk}: свеча {tfm}, сигнал актуален {cfg['signal_valid_bars']} св. "
+                    f"({window_ms // 60_000} мин), а проверка идёт раз в {cfg['scan_interval_min']} мин: часть сигналов устареет до проверки."
+                )
+            delay = feed_delay_s(mk, tfm)
+            if delay:
+                warns.append(f"Рынок {mk}: данные с задержкой ~{delay // 60} мин, на таймфрейме {tfm} сигналы запаздывают.")
         return {
+            "warnings": warns,
             "background_scanner": bool(sc and sc.alive),
             "interval_min": cfg["scan_interval_min"],
             "last_scan_at": svc.engine.last_scan_at,
