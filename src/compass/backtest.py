@@ -95,7 +95,10 @@ def backtest(
     fee_pct: float = 0.05,
     slippage_pct: float = 0.05,
     rules: Rules | None = None,
+    start: int = 0,
 ) -> BacktestResult:
+    """start — индекс первой торгуемой свечи: более ранние нужны только индикаторам (ATR) и не торгуются.
+    Так проверочный период считается отдельно, с собственным начальным капиталом, а не «хвостом» общего прогона."""
     if len(df) != len(target):
         raise ValueError("target и свечи разной длины")
     if capital <= 0 or fee_pct < 0 or slippage_pct < 0:
@@ -103,6 +106,8 @@ def backtest(
     n = len(df)
     if n < 2:
         raise ValueError("Слишком мало свечей для бэктеста")
+    if not 0 <= start <= n - 2:
+        raise ValueError("Начало периода вне ряда свечей")
     rules = rules or Rules()
     rules.check()
 
@@ -139,7 +144,7 @@ def backtest(
         )
         qty = 0.0
 
-    for i in range(n):
+    for i in range(start, n):
         # 1. отложенное решение прошлой свечи исполняется по открытию этой
         if pending == "buy" and qty == 0:
             price = opens[i] * (1 + slip)
@@ -226,7 +231,7 @@ def backtest(
             )
         )
 
-    metrics = _metrics(trades, equity, closes, capital, bars_in_market, n)
+    metrics = _metrics(trades, equity, closes[start:], capital, bars_in_market, n - start)
     metrics.update(counters)
     return BacktestResult(trades, equity, metrics)
 

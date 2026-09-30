@@ -344,3 +344,64 @@ export interface PlanReview {
   r_multiple?: number | null;
   notes?: string[];
 }
+
+export interface BacktestRequestBody {
+  market: MarketId;
+  symbol: string;
+  tf: string;
+  strategy: string;
+  params: Record<string, number>;
+  limit: number;
+  capital: number;
+  fee_pct: number;
+  slippage_pct: number;
+  stop_atr_mult?: number;
+  target_r?: number;
+  risk_pct?: number;
+}
+
+export interface OosSegment {
+  total_return_pct: number;
+  buy_hold_return_pct: number;
+  max_drawdown_pct: number;
+  trades: number;
+  win_rate_pct: number | null;
+  profit_factor: number | null;
+}
+
+export interface OosResponse {
+  split: {
+    train_pct: number;
+    train_candles: number;
+    test_candles: number;
+    train_from: number;
+    train_to: number;
+    test_from: number;
+    test_to: number;
+  };
+  optimization: {
+    enabled: boolean;
+    objective: string;
+    variants: number;
+    dropped_invalid: number;
+    eligible: number;
+    top: { params: Record<string, number>; score: number; return_pct: number; trades: number }[];
+  };
+  chosen: { params: Record<string, number>; train: OosSegment; test: OosSegment; train_score: number | null } | null;
+  baseline: { params: Record<string, number>; train: OosSegment; test: OosSegment } | null;
+  sensitivity: {
+    param: string;
+    value: number;
+    train_score: number | null;
+    train_return_pct: number;
+    test_return_pct: number;
+    test_trades: number;
+  }[];
+  cost_sensitivity: { multiplier: number; fee_pct: number; slippage_pct: number; return_pct: number; trades: number }[];
+  verdict: { status: "held" | "degraded" | "inconclusive"; reasons: string[] };
+  notes: string[];
+  strategy: string;
+  strategy_version: string;
+  warnings: string[];
+  trials: { prior_variants: number; this_run_variants: number; total_variants: number; warning: string | null };
+}

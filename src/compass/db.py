@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _V1 = """
 CREATE TABLE candles (
@@ -145,6 +145,23 @@ CREATE TRIGGER plans_no_update BEFORE UPDATE ON plans BEGIN SELECT RAISE(ABORT, 
 CREATE TRIGGER plans_no_delete BEFORE DELETE ON plans BEGIN SELECT RAISE(ABORT, 'План сделки нельзя удалить'); END;
 """
 
+# История всех проверок стратегий (запусков и переборов): только добавление, чтобы нельзя было
+# оставить одни удачные результаты.
+_V10 = """
+CREATE TABLE experiments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('backtest','validate')),
+  market TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+  strategy TEXT NOT NULL, strategy_version TEXT, params TEXT NOT NULL, config TEXT NOT NULL,
+  data_hash TEXT NOT NULL, engine_version TEXT NOT NULL, candles INTEGER NOT NULL,
+  n_variants INTEGER NOT NULL CHECK (n_variants >= 1), result TEXT NOT NULL
+);
+CREATE INDEX experiments_rule ON experiments (market, symbol, tf, strategy);
+CREATE TRIGGER experiments_no_update BEFORE UPDATE ON experiments BEGIN SELECT RAISE(ABORT, 'История проверок неизменяема'); END;
+CREATE TRIGGER experiments_no_delete BEFORE DELETE ON experiments BEGIN SELECT RAISE(ABORT, 'Историю проверок нельзя удалить'); END;
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -222,4 +239,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 9:
         conn.executescript(_V9)
         conn.execute("PRAGMA user_version = 9")
+        conn.commit()
+    if version < 10:
+        conn.executescript(_V10)
+        conn.execute("PRAGMA user_version = 10")
         conn.commit()

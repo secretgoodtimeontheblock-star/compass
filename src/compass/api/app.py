@@ -16,13 +16,14 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from compass import __version__
+from compass import __version__, oos
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
 from compass.backtest import Rules, backtest
 from compass.cache import CandleCache
 from compass.data_quality import check_candles
+from compass.experiments import Experiment, ExperimentLog, multiple_testing_warning
 from compass.journal import MODES, Entry, Journal
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
@@ -69,6 +70,7 @@ class Services:
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
     live: OkxLive | None = None
     plans: PlanStore | None = None
+    experiments: ExperimentLog | None = None
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -125,6 +127,11 @@ class BacktestRequest(BaseModel):
     stop_atr_mult: float | None = Field(None, gt=0, le=20)
     target_r: float | None = Field(None, gt=0, le=50)
     risk_pct: float | None = Field(None, gt=0, le=100)
+
+
+class ValidateRequest(BacktestRequest):
+    train_pct: float = Field(70, ge=50, le=90)  # доля истории на подбор; остальное — проверка
+    grid: dict[str, list[int]] = Field(default_factory=dict)  # параметр -> значения для перебора; пусто — без подбора
 
 
 class RiskRequest(BaseModel):
@@ -252,6 +259,36 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             for s in STRATEGIES.values()
         ]
 
+    def load_series(req: BacktestRequest, min_candles: int = 30):
+        """Закрытые свечи для расчёта: незакрытая ещё меняется, расчёт по ней показал бы то, чего не было."""
+        res = svc.cache.get(req.market, req.symbol, req.tf, req.limit)
+        candles = closed_candles(res.candles, req.tf, svc.now_ms())
+        if len(candles) < min_candles:
+            raise ValueError(f"Слишком мало истории (нужно хотя бы {min_candles} закрытых свечей)")
+        return res, candles_to_df(candles), len(candles) < len(res.candles), check_candles(candles, req.market, req.tf)
+
+    def make_rules(req: BacktestRequest) -> Rules | None:
+        if req.stop_atr_mult is None and req.target_r is None and req.risk_pct is None:
+            return None
+        Rules(stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct).check()
+        info = instrument_info(req.market, req.symbol)
+        bond = info.price_unit == "percent_of_face"
+        if bond and not info.face_value:
+            raise ValueError("Для облигации не получен номинал: посчитать размер по риску нельзя")
+        return Rules(
+            stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct, lot=info.lot,
+            qty_step=(info.qty_step or CRYPTO_QTY_STEP) if req.market == "crypto" else None,
+            unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
+        )
+
+    def rules_dict(rules: Rules | None) -> dict | None:
+        if rules is None:
+            return None
+        return {
+            "stop_atr_mult": rules.stop_atr_mult, "target_r": rules.target_r, "risk_pct": rules.risk_pct,
+            "atr_period": rules.atr_period, "lot": rules.lot, "qty_step": rules.qty_step, "unit_value": rules.unit_value,
+        }
+
     @app.post("/api/backtest")
     def run_backtest(req: BacktestRequest) -> dict:
         adapter(req.market)
@@ -259,27 +296,8 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         if strat is None:
             raise HTTPException(404, f"Неизвестная стратегия: {req.strategy}")
         params = strat.resolve(req.params)
-        res = svc.cache.get(req.market, req.symbol, req.tf, req.limit)
-        # незакрытая свеча ещё меняется: бэктест по ней показал бы результат, которого не было
-        candles = closed_candles(res.candles, req.tf, svc.now_ms())
-        open_dropped = len(candles) < len(res.candles)
-        if len(candles) < 30:
-            raise ValueError("Слишком мало истории для бэктеста (нужно хотя бы 30 закрытых свечей)")
-        quality = check_candles(candles, req.market, req.tf)
-        df = candles_to_df(candles)
-        rules = None
-        if req.stop_atr_mult is not None or req.target_r is not None or req.risk_pct is not None:
-            rules = Rules(stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct)
-            rules.check()
-            info = instrument_info(req.market, req.symbol)
-            bond = info.price_unit == "percent_of_face"
-            if bond and not info.face_value:
-                raise ValueError("Для облигации не получен номинал: посчитать размер по риску нельзя")
-            rules = Rules(
-                stop_atr_mult=req.stop_atr_mult, target_r=req.target_r, risk_pct=req.risk_pct, lot=info.lot,
-                qty_step=(info.qty_step or CRYPTO_QTY_STEP) if req.market == "crypto" else None,
-                unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
-            )
+        res, df, open_dropped, quality = load_series(req)
+        rules = make_rules(req)
         bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct, rules)
         ts = df["ts"].to_numpy()
         eq = np.array([v for _, v in bt.equity])
@@ -305,7 +323,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 f"Вход по сигналу пропущен {m['skipped_entries']} раз: открытие уже ниже стопа, "
                 "идёт прогрев ATR или размер по риску округлился до нуля."
             )
-        return {
+        out = {
             "strategy": strat.id,
             "params": params,
             "stale": res.stale,
@@ -314,7 +332,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "warnings": warnings,
             "coverage": {
                 "requested": req.limit,
-                "candles": len(candles),
+                "candles": len(df),
                 "first_ts": int(df["ts"].iloc[0]),
                 "last_ts": int(df["ts"].iloc[-1]),
                 # получили меньше запрошенного — у источника больше нет; ровно столько — раньше история могла быть
@@ -336,15 +354,84 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 slippage_pct=req.slippage_pct,
                 stale=res.stale,
                 strategy_version=strategy_version(strat, params),
-                rules=None if rules is None else {
-                    "stop_atr_mult": rules.stop_atr_mult, "target_r": rules.target_r, "risk_pct": rules.risk_pct,
-                    "atr_period": rules.atr_period, "lot": rules.lot, "qty_step": rules.qty_step,
-                    "unit_value": rules.unit_value,
-                },
+                rules=rules_dict(rules),
             ),
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],
         }
+        prior = record_experiment("backtest", req, strat.id, params, 1, out["run_card"], {
+            k: metrics.get(k) for k in ("total_return_pct", "max_drawdown_pct", "trades", "avg_r", "sharpe")
+        })
+        out["trials"] = trials_dto(prior, 1)
+        return out
+
+    def record_experiment(kind, req, strategy_id, params, variants, card, result, extra_config=None) -> int:
+        """Записывает запуск в неизменяемую историю; возвращает, сколько вариантов пробовали ДО него."""
+        if svc.experiments is None:
+            return 0
+        prior = svc.experiments.variants_tried(req.market, req.symbol, req.tf, strategy_id)
+        svc.experiments.add(
+            Experiment(
+                kind=kind, market=req.market, symbol=req.symbol, tf=req.tf, strategy=strategy_id,
+                strategy_version=card.get("strategy_version"), params=params,
+                config={
+                    "capital": req.capital, "fee_pct": req.fee_pct, "slippage_pct": req.slippage_pct,
+                    "limit": req.limit, "rules": card.get("rules"), **(extra_config or {}),
+                },
+                data_hash=card["data_hash"], engine_version=card["engine_version"], candles=card["candles"],
+                n_variants=variants, result=result,
+            )
+        )
+        return prior
+
+    def trials_dto(prior: int, this_run: int) -> dict:
+        return {
+            "prior_variants": prior, "this_run_variants": this_run, "total_variants": prior + this_run,
+            "warning": multiple_testing_warning(prior + this_run),
+        }
+
+    @app.post("/api/validate")
+    def validate_out_of_sample(req: ValidateRequest) -> dict:
+        adapter(req.market)
+        strat = STRATEGIES.get(req.strategy)
+        if strat is None:
+            raise HTTPException(404, f"Неизвестная стратегия: {req.strategy}")
+        base = strat.resolve(req.params)
+        res, df, open_dropped, quality = load_series(req, min_candles=oos.MIN_TRAIN_CANDLES + oos.MIN_TEST_CANDLES)
+        rules = make_rules(req)
+        result = oos.run_oos(strat, base, req.grid, df, req.train_pct, req.capital, req.fee_pct, req.slippage_pct, rules)
+        chosen = (result["chosen"] or {}).get("params", base)
+        card = run_card(
+            df, market=req.market, symbol=req.symbol, tf=req.tf, strategy=strat.id, params=chosen, capital=req.capital,
+            fee_pct=req.fee_pct, slippage_pct=req.slippage_pct, stale=res.stale,
+            strategy_version=strategy_version(strat, chosen), rules=rules_dict(rules),
+        )
+        variants = result["optimization"]["variants"]
+        summary = {
+            "train_pct": req.train_pct, "chosen": chosen, "verdict": result["verdict"]["status"],
+            "train_return_pct": ((result["chosen"] or {}).get("train") or {}).get("total_return_pct"),
+            "test_return_pct": ((result["chosen"] or {}).get("test") or {}).get("total_return_pct"),
+            "test_trades": ((result["chosen"] or {}).get("test") or {}).get("trades"),
+        }
+        prior = record_experiment(
+            "validate", req, strat.id, chosen, variants, card, summary,
+            {"train_pct": req.train_pct, "grid": req.grid},
+        )
+        warnings = []
+        if open_dropped:
+            warnings.append("Последняя свеча ещё не закрыта и в расчёт не входит.")
+        if res.stale:
+            warnings.append("Источник данных недоступен — расчёт по сохранённым данным.")
+        return {
+            **result, "strategy": strat.id, "strategy_version": card["strategy_version"], "run_card": card,
+            "data_quality": quality, "warnings": warnings, "trials": trials_dto(prior, variants),
+        }
+
+    @app.get("/api/experiments")
+    def experiments_list(
+        market: str | None = None, symbol: str | None = None, limit: int = Query(100, ge=1, le=500)
+    ) -> list[dict]:
+        return svc.experiments.list(market, symbol, limit) if svc.experiments else []
 
     # --- сигналы ---
 

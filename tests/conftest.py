@@ -10,6 +10,7 @@ from compass.ai.service import AiService
 from compass.api.app import Services
 from compass.cache import CandleCache
 from compass.db import connect
+from compass.experiments import ExperimentLog
 from compass.journal import Journal
 from compass.markets import MarketError
 from compass.models import Candle, Instrument, InstrumentInfo
@@ -118,6 +119,7 @@ def env() -> Env:
     svc = Services(
         adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0],
         plans=PlanStore(conn),
+        experiments=ExperimentLog(conn),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

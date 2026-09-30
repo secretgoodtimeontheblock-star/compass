@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtDate, fmtNum, fmtPct, fmtPrice, pnlClass } from "../lib/format";
-import type { BacktestResponse, Instrument, Settings, Strategy, Trade } from "../types";
+import type { BacktestRequestBody, BacktestResponse, Instrument, Settings, Strategy, Trade } from "../types";
 import { EquityChart } from "./EquityChart";
+import { OosPanel } from "./OosPanel";
 
 interface Props {
   instrument: Instrument | undefined;
@@ -70,6 +71,25 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   if (!instrument || !strat) {
     return <div className="empty">Выберите тикер, чтобы проверить на нём стратегию.</div>;
   }
+
+  const requestBody = (): BacktestRequestBody => ({
+    market: instrument.market,
+    symbol: instrument.symbol,
+    tf,
+    strategy: strat.id,
+    params,
+    limit: depth,
+    capital,
+    fee_pct: fee,
+    slippage_pct: slip,
+    ...(useStop
+      ? {
+          stop_atr_mult: Number(stopMult),
+          target_r: targetR ? Number(targetR) : undefined,
+          risk_pct: riskPct ? Number(riskPct) : undefined,
+        }
+      : {}),
+  });
 
   const run = async () => {
     setBusy(true);
@@ -240,6 +260,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
       </div>
 
       {error && <div className="error">{error}</div>}
+      <OosPanel key={`${instrument.market}:${instrument.symbol}:${strat.id}`} strategy={strat} request={requestBody()} />
       {res?.stale && <div className="notice">Источник данных недоступен — расчёт по сохранённым данным.</div>}
       {res && res.data_quality.status !== "ok" && (
         <div className={res.data_quality.status === "error" ? "error" : "notice"}>

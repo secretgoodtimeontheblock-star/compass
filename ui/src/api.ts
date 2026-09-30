@@ -3,6 +3,7 @@ import type {
   AiProviderInfo,
   AiResult,
   AiStatus,
+  BacktestRequestBody,
   BacktestResponse,
   CandlesResponse,
   Instrument,
@@ -10,6 +11,7 @@ import type {
   JournalMode,
   Market,
   MarketId,
+  OosResponse,
   PlanDto,
   PlanReview,
   Position,
@@ -81,20 +83,9 @@ export const api = {
   removeWatch: (i: Instrument) => request<void>(`/api/watchlist/${i.market}/${i.symbol}`, { method: "DELETE" }),
 
   strategies: () => request<Strategy[]>("/api/strategies"),
-  backtest: (body: {
-    market: MarketId;
-    symbol: string;
-    tf: string;
-    strategy: string;
-    params: Record<string, number>;
-    limit: number;
-    capital: number;
-    fee_pct: number;
-    slippage_pct: number;
-    stop_atr_mult?: number;
-    target_r?: number;
-    risk_pct?: number;
-  }) => request<BacktestResponse>("/api/backtest", json("POST", body)),
+  backtest: (body: BacktestRequestBody) => request<BacktestResponse>("/api/backtest", json("POST", body)),
+  validate: (body: BacktestRequestBody & { train_pct: number; grid: Record<string, number[]> }) =>
+    request<OosResponse>("/api/validate", json("POST", body)),
 
   signals: (p: { limit?: number; unseen?: boolean; market?: MarketId; symbol?: string } = {}) =>
     request<Signal[]>(`/api/signals?${qs(p)}`),
