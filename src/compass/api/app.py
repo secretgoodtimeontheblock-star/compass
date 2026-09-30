@@ -21,6 +21,7 @@ from compass.accounts import Account, AccountStore
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
+from compass.api.replay_routes import register_replay_routes
 from compass.backtest import Rules, backtest
 from compass.cache import CandleCache
 from compass.data_quality import check_candles
@@ -30,6 +31,7 @@ from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument, InstrumentInfo, closed_candles
 from compass.plans import Plan, PlanStore, plan_dto, review
+from compass.replay import ReplayStore
 from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
@@ -80,6 +82,7 @@ class Services:
     plans: PlanStore | None = None
     experiments: ExperimentLog | None = None
     accounts: AccountStore | None = None
+    replay: ReplayStore | None = None
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -829,6 +832,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             raise HTTPException(404, "Записи нет в журнале")
 
     register_ai_routes(app, svc)
+    register_replay_routes(app, svc, instrument_info, adapter, CRYPTO_QTY_STEP)
 
     # Интерфейс — последним: маршруты /api/* должны матчиться раньше статики.
     if STATIC_DIR.is_dir():

@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _V1 = """
 CREATE TABLE candles (
@@ -202,6 +202,33 @@ CREATE TABLE scan_state (
 );
 """
 
+# Учебные сессии воспроизведения свечей. Свечи заморожены копией в сессии; сделки — свои, в журнал реальных не попадают.
+_V13 = """
+CREATE TABLE replay_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  market TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL, source TEXT NOT NULL,
+  capital REAL NOT NULL CHECK (capital > 0),
+  fee_pct REAL NOT NULL CHECK (fee_pct >= 0), slippage_pct REAL NOT NULL CHECK (slippage_pct >= 0),
+  start_index INTEGER NOT NULL, cursor INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active','finished')),
+  data_hash TEXT NOT NULL,
+  pending TEXT, stop REAL,
+  candles TEXT NOT NULL
+);
+CREATE TABLE replay_fills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES replay_sessions(id),
+  ts INTEGER NOT NULL, side TEXT NOT NULL CHECK (side IN ('buy','sell')),
+  qty REAL NOT NULL CHECK (qty > 0), price REAL NOT NULL CHECK (price > 0), fee REAL NOT NULL CHECK (fee >= 0),
+  reason TEXT NOT NULL, stop REAL
+);
+CREATE INDEX replay_fills_session ON replay_fills (session_id, id);
+CREATE TRIGGER replay_fills_no_update BEFORE UPDATE ON replay_fills BEGIN SELECT RAISE(ABORT, 'Сделка учебной сессии неизменяема'); END;
+CREATE TRIGGER replay_fills_no_delete BEFORE DELETE ON replay_fills BEGIN SELECT RAISE(ABORT, 'Сделку учебной сессии нельзя удалить'); END;
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -291,4 +318,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 12:
         conn.executescript(_V12)
         conn.execute("PRAGMA user_version = 12")
+        conn.commit()
+    if version < 13:
+        conn.executescript(_V13)
+        conn.execute("PRAGMA user_version = 13")
         conn.commit()

@@ -6,6 +6,7 @@ import type {
   AccountDto,
   BacktestRequestBody,
   BacktestResponse,
+  Candle,
   CandlesResponse,
   DayResponse,
   Instrument,
@@ -17,6 +18,7 @@ import type {
   PlanDto,
   PlanReview,
   Position,
+  ReplaySession,
   RiskResponse,
   ScanResponse,
   Settings,
@@ -134,6 +136,20 @@ export const api = {
     },
   ) =>
     request<JournalEntry>("/api/journal", json("POST", e)),
+  replayList: () =>
+    request<{ id: number; market: string; symbol: string; tf: string; status: string; replayed: number; remaining: number }[]>(
+      "/api/replay",
+    ),
+  replayStart: (b: { market: MarketId; symbol: string; tf: string; replay_bars: number; capital?: number }) =>
+    request<ReplaySession>("/api/replay", json("POST", b)),
+  replayGet: (id: number) => request<ReplaySession>(`/api/replay/${id}`),
+  replayCandles: (id: number) => request<{ source: string; candles: Candle[] }>(`/api/replay/${id}/candles`),
+  replayOrder: (id: number, b: { side: "buy" | "sell"; qty: number; stop: number | null }) =>
+    request<ReplaySession>(`/api/replay/${id}/order`, json("POST", b)),
+  replayCancelOrder: (id: number) => request<ReplaySession>(`/api/replay/${id}/order`, { method: "DELETE" }),
+  replayStop: (id: number, stop: number | null) => request<ReplaySession>(`/api/replay/${id}/stop`, json("POST", { stop })),
+  replayStep: (id: number, bars: number) => request<ReplaySession>(`/api/replay/${id}/step`, json("POST", { bars })),
+  replayFinish: (id: number) => request<ReplaySession>(`/api/replay/${id}/finish`, { method: "POST" }),
   createPlan: (b: {
     market: MarketId;
     symbol: string;

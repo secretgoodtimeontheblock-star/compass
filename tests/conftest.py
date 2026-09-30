@@ -16,6 +16,7 @@ from compass.journal import Journal
 from compass.markets import MarketError
 from compass.models import Candle, Instrument, InstrumentInfo
 from compass.plans import PlanStore
+from compass.replay import ReplayStore
 from compass.settings import Settings
 from compass.signals import Signal, SignalEngine, SignalStore
 from compass.watchlist import Watchlist
@@ -126,6 +127,7 @@ def env() -> Env:
         plans=PlanStore(conn),
         experiments=ExperimentLog(conn),
         accounts=AccountStore(conn),
+        replay=ReplayStore(conn),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

@@ -7,6 +7,7 @@ import { DataStatus } from "./components/DataStatus";
 import { GettingStarted } from "./components/GettingStarted";
 import { Icon } from "./components/Icon";
 import { JournalPanel } from "./components/JournalPanel";
+import { ReplayPanel } from "./components/ReplayPanel";
 import { type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -20,13 +21,14 @@ import { hasGap, mergeLiveHistory } from "./lib/live-candles";
 import { TF_MS } from "./lib/indicators";
 import type { AiStatus, Instrument, JournalDraft, JournalMode, MarketId, Settings, Signal } from "./types";
 
-type Tab = "signals" | "backtest" | "journal" | "ai";
+type Tab = "signals" | "backtest" | "journal" | "replay" | "ai";
 type Toast = { id: number; title: string; text: string };
 
 const TABS = [
   ["signals", "Сигналы"],
   ["backtest", "Проверка"],
   ["journal", "Журнал"],
+  ["replay", "Тренировка"],
   ["ai", "AI"],
 ] as const;
 
@@ -479,6 +481,7 @@ export default function App() {
               }
             />
           )}
+          {tab === "replay" && <ReplayPanel instrument={selected} tf={tf} theme={theme} />}
           {tab === "ai" && <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />}
           </div>
         </aside>

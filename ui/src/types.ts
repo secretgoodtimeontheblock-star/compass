@@ -485,3 +485,52 @@ export interface DayResponse {
   problem_sources: { market: MarketId; symbol: string; status: string; message: string }[];
   notes: string[];
 }
+
+export interface ReplayFill {
+  ts: number;
+  side: "buy" | "sell";
+  qty: number;
+  price: number;
+  fee: number;
+  reason: string;
+  stop: number | null;
+  risk_pct: number | null;
+}
+
+export interface ReplayResult {
+  equity: number;
+  return_pct: number;
+  buy_hold_pct: number;
+  max_drawdown_pct: number;
+  fills: number;
+  closed_trades: number;
+  win_rate_pct: number | null;
+  realized: number;
+  fees: number;
+  entries_without_stop: number;
+  max_entry_risk_pct: number;
+  note: string | null;
+}
+
+export interface ReplaySession {
+  id: number;
+  market: MarketId;
+  symbol: string;
+  tf: string;
+  source: string;
+  status: "active" | "finished";
+  capital: number;
+  cursor_ts: number;
+  replayed: number;
+  remaining: number;
+  last_close: number;
+  cash: number;
+  qty: number;
+  avg_price: number | null;
+  stop: number | null;
+  pending: { side: "buy" | "sell"; qty: number; stop: number | null } | null;
+  fills: ReplayFill[];
+  result: ReplayResult;
+  notes: string[];
+  events?: string[];
+}
