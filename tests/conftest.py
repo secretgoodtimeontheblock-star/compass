@@ -13,6 +13,7 @@ from compass.cache import CandleCache
 from compass.db import connect
 from compass.experiments import ExperimentLog
 from compass.journal import Journal
+from compass.levels import LevelStore
 from compass.markets import MarketError
 from compass.models import Candle, Instrument, InstrumentInfo
 from compass.plans import PlanStore
@@ -128,6 +129,7 @@ def env() -> Env:
         experiments=ExperimentLog(conn),
         accounts=AccountStore(conn),
         replay=ReplayStore(conn),
+        levels=LevelStore(conn),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

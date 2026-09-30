@@ -12,6 +12,7 @@ import type {
   Instrument,
   JournalEntry,
   JournalMode,
+  LevelDto,
   Market,
   MarketId,
   OosResponse,
@@ -102,6 +103,13 @@ export const api = {
 
   risk: (b: { market: MarketId; symbol: string; entry: number; stop: number }) =>
     request<RiskResponse>("/api/risk", json("POST", b)),
+  levels: (market: MarketId, symbol: string) => request<LevelDto[]>(`/api/levels?${qs({ market, symbol })}`),
+  addLevel: (b: { market: MarketId; symbol: string; price: number; label: string }) =>
+    request<LevelDto>("/api/levels", json("POST", b)),
+  removeLevel: (id: number) => request<void>(`/api/levels/${id}`, { method: "DELETE" }),
+  restoreLevel: (id: number) => request<{ restored: number }>(`/api/levels/${id}/restore`, { method: "POST" }),
+  plansActive: (market: MarketId, symbol: string) =>
+    request<(PlanDto & { status: string })[]>(`/api/plans-active?${qs({ market, symbol })}`),
   accounts: () => request<AccountDto[]>("/api/accounts"),
   updateAccount: (market: string, changes: Partial<Omit<AccountDto, "market" | "currency">>) =>
     request<AccountDto>(`/api/accounts/${market}`, json("PUT", changes)),

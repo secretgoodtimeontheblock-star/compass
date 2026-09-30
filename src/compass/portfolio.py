@@ -114,6 +114,13 @@ def snapshot(account: Account, entries: list[Entry], now_ms: int) -> dict[str, A
             f"Дневной лимит убытка достигнут: сегодня {daily_pnl:,.2f} при лимите −{daily_limit:,.2f} "
             f"({account.daily_loss_limit_pct:g}% капитала). Ваш план говорит остановиться на сегодня.".replace(",", " ")
         )
+    day_entries = sum(1 for e in entries if e.side == "buy" and e.ts >= day_from)
+    trades_breached = account.max_trades_per_day is not None and day_entries >= account.max_trades_per_day
+    if trades_breached:
+        warnings.append(
+            f"Сегодня уже {day_entries} входов при вашем лимите {account.max_trades_per_day}: частые сделки съедают результат "
+            "комиссиями и проскальзыванием, а ошибки в них копятся."
+        )
     heat_pct = pct(open_risk)
     if heat_pct is not None and heat_pct > account.max_open_risk_pct:
         warnings.append(
@@ -131,6 +138,7 @@ def snapshot(account: Account, entries: list[Entry], now_ms: int) -> dict[str, A
         "free": None if free is None else round(free, 2),
         "realized_total": round(realized_total, 2), "daily_pnl": round(daily_pnl, 2),
         "daily_limit": None if daily_limit is None else round(daily_limit, 2), "daily_limit_breached": daily_breached,
+        "entries_today": day_entries, "max_trades_per_day": account.max_trades_per_day, "trades_limit_reached": trades_breached,
         "exposure": round(exposure, 2), "exposure_pct": pct(exposure),
         "open_risk": round(open_risk, 2), "heat_pct": heat_pct, "max_open_risk_pct": account.max_open_risk_pct,
         "positions": positions, "unprotected": unprotected, "warnings": warnings,
@@ -154,6 +162,8 @@ def assess_new_position(snap: dict[str, Any], account: Account, risk_amount: flo
             f"С этой позицией суммарный риск открытых позиций станет {heat_after:g}% капитала при вашем пределе "
             f"{account.max_open_risk_pct:g}%."
         )
+    if snap.get("trades_limit_reached"):
+        warnings.append("Лимит входов на сегодня уже достигнут: новый вход выходит за ваш собственный план на день.")
     if snap["free"] is not None and cost > snap["free"] + 1e-9:
         warnings.append("Стоимость входа больше свободных средств счёта.")
     if snap["unprotected"]:

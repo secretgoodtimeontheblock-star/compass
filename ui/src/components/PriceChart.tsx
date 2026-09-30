@@ -6,6 +6,7 @@ import {
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -15,6 +16,12 @@ import {
 import { useEffect, useRef } from "react";
 import { snapToCandle, sma, TF_MS } from "../lib/indicators";
 import type { Candle, JournalEntry, Signal } from "../types";
+
+export interface ChartLine {
+  price: number;
+  label: string;
+  kind: "level" | "entry" | "stop" | "target";
+}
 
 export interface Overlays {
   sma20: boolean;
@@ -30,6 +37,7 @@ interface Props {
   overlays: Overlays;
   theme: string; // меняется → перекрашиваем график
   resetKey: string; // тикер+таймфрейм: при смене — показать весь ряд
+  lines?: ChartLine[]; // уровни пользователя и линии активных планов
 }
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -46,7 +54,7 @@ function palette() {
   };
 }
 
-export function PriceChart({ candles, tf, signals, trades, overlays, theme, resetKey }: Props) {
+export function PriceChart({ candles, tf, signals, trades, overlays, theme, resetKey, lines = [] }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const series = useRef<{
@@ -57,6 +65,7 @@ export function PriceChart({ candles, tf, signals, trades, overlays, theme, rese
     markers: ISeriesMarkersPluginApi<Time>;
   } | null>(null);
   const lastKey = useRef("");
+  const priceLines = useRef<IPriceLine[]>([]);
 
   // создаём график один раз
   useEffect(() => {
@@ -194,6 +203,25 @@ export function PriceChart({ candles, tf, signals, trades, overlays, theme, rese
       lastKey.current = resetKey;
     }
   }, [candles, tf, signals, trades, overlays, resetKey, theme]);
+
+  // линии уровней и планов: пересоздаются целиком, цвета следуют теме
+  useEffect(() => {
+    const s = series.current;
+    if (!s) return;
+    for (const l of priceLines.current) s.candle.removePriceLine(l);
+    const p = palette();
+    const color = { level: p.warn, entry: p.accent, stop: p.down, target: p.up } as const;
+    priceLines.current = lines.map((l) =>
+      s.candle.createPriceLine({
+        price: l.price,
+        color: color[l.kind],
+        lineWidth: 1,
+        lineStyle: l.kind === "level" ? 2 : 0,
+        axisLabelVisible: true,
+        title: l.label,
+      }),
+    );
+  }, [JSON.stringify(lines), theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div ref={box} className="chart-box" role="img" aria-label="График цены" />;
 }

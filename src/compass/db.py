@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _V1 = """
 CREATE TABLE candles (
@@ -229,6 +229,22 @@ CREATE TRIGGER replay_fills_no_update BEFORE UPDATE ON replay_fills BEGIN SELECT
 CREATE TRIGGER replay_fills_no_delete BEFORE DELETE ON replay_fills BEGIN SELECT RAISE(ABORT, 'Сделку учебной сессии нельзя удалить'); END;
 """
 
+# Сохранённые уровни пользователя (мягкое удаление) и необязательный лимит числа сделок в день по счёту:
+# для внутридневной торговли главный враг — избыточная частота сделок, а не отдельная сделка.
+_V14 = """
+CREATE TABLE levels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT NOT NULL UNIQUE,
+  market TEXT NOT NULL, symbol TEXT NOT NULL,
+  price REAL NOT NULL CHECK (price > 0),
+  label TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  deleted_at INTEGER
+);
+CREATE INDEX levels_symbol ON levels (market, symbol);
+ALTER TABLE accounts ADD COLUMN max_trades_per_day INTEGER CHECK (max_trades_per_day IS NULL OR max_trades_per_day > 0);
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -322,4 +338,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 13:
         conn.executescript(_V13)
         conn.execute("PRAGMA user_version = 13")
+        conn.commit()
+    if version < 14:
+        conn.executescript(_V14)
+        conn.execute("PRAGMA user_version = 14")
         conn.commit()

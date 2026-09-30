@@ -1008,3 +1008,13 @@ kbd {
 @keyframes drawer-in {
   from { transform: translateX(24px); opacity: 0; }
 }
+
+.chart-extras {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.chart-extras .badge .icon-btn {
+  margin-left: 4px;
+  padding: 0 2px;
+}

@@ -447,6 +447,7 @@ export interface AccountDto {
   risk_pct: number;
   daily_loss_limit_pct: number;
   max_open_risk_pct: number;
+  max_trades_per_day: number | null;
 }
 
 export interface AccountPosition {
@@ -533,4 +534,14 @@ export interface ReplaySession {
   result: ReplayResult;
   notes: string[];
   events?: string[];
+}
+
+export interface LevelDto {
+  id: number;
+  uid: string;
+  market: MarketId;
+  symbol: string;
+  price: number;
+  label: string;
+  created_at: number;
 }

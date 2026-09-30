@@ -26,9 +26,10 @@ class Account:
     risk_pct: float = 1.0  # риск на одну сделку, % капитала
     daily_loss_limit_pct: float = 3.0  # дневной лимит реализованного убытка, % капитала
     max_open_risk_pct: float = 6.0  # «тепло»: суммарный риск открытых позиций по стопам, % капитала
+    max_trades_per_day: int | None = None  # лимит входов в день (для внутридневной торговли); None — без лимита
 
 
-_COLUMNS = "market, name, currency, capital, risk_pct, daily_loss_limit_pct, max_open_risk_pct"
+_COLUMNS = "market, name, currency, capital, risk_pct, daily_loss_limit_pct, max_open_risk_pct, max_trades_per_day"
 
 
 def _pct(v: Any, label: str) -> float:
@@ -56,7 +57,7 @@ class AccountStore:
         acc = self.get(market)
         if acc is None:
             raise KeyError(market)
-        allowed = {"name", "capital", "risk_pct", "daily_loss_limit_pct", "max_open_risk_pct"}
+        allowed = {"name", "capital", "risk_pct", "daily_loss_limit_pct", "max_open_risk_pct", "max_trades_per_day"}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"Неизвестные поля счёта: {', '.join(sorted(unknown))}")
@@ -80,10 +81,16 @@ class AccountStore:
         ):
             if key in changes:
                 new = replace(new, **{key: _pct(changes[key], label)})
+        if "max_trades_per_day" in changes:
+            v = changes["max_trades_per_day"]
+            if v is not None and (isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 10_000):
+                raise ValueError("Лимит сделок в день: целое число от 1 до 10000 (или пусто — без лимита)")
+            new = replace(new, max_trades_per_day=v)
         with self._lock, self._conn:
             self._conn.execute(
-                "UPDATE accounts SET name=?, capital=?, risk_pct=?, daily_loss_limit_pct=?, max_open_risk_pct=? "
-                "WHERE market=?",
-                (new.name, new.capital, new.risk_pct, new.daily_loss_limit_pct, new.max_open_risk_pct, market),
+                "UPDATE accounts SET name=?, capital=?, risk_pct=?, daily_loss_limit_pct=?, max_open_risk_pct=?, "
+                "max_trades_per_day=? WHERE market=?",
+                (new.name, new.capital, new.risk_pct, new.daily_loss_limit_pct, new.max_open_risk_pct,
+                 new.max_trades_per_day, market),
             )
         return new

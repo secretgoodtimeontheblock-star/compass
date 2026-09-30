@@ -15,6 +15,7 @@ from compass.config import Config
 from compass.db import connect
 from compass.experiments import ExperimentLog
 from compass.journal import Journal
+from compass.levels import LevelStore
 from compass.live import OkxLive
 from compass.markets import CryptoAdapter, MoexAdapter
 from compass.notify import CompositeNotifier, TelegramNotifier
@@ -45,7 +46,7 @@ def build_services(cfg: Config, background_scan: bool = True) -> Services:
     ai = AiService(providers, settings, conn)
     scanner = BackgroundScanner(engine, settings) if background_scan else None
     live = OkxLive(cache, cfg.proxy) if cfg.crypto_exchange == "okx" else None
-    return Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, scanner, live, PlanStore(conn), ExperimentLog(conn), AccountStore(conn), ReplayStore(conn))
+    return Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, scanner, live, PlanStore(conn), ExperimentLog(conn), AccountStore(conn), ReplayStore(conn), LevelStore(conn))
 
 
 def main() -> None:

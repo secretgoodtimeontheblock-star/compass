@@ -8,7 +8,8 @@ import { GettingStarted } from "./components/GettingStarted";
 import { Icon } from "./components/Icon";
 import { JournalPanel } from "./components/JournalPanel";
 import { ReplayPanel } from "./components/ReplayPanel";
-import { type Overlays, PriceChart } from "./components/PriceChart";
+import { ChartExtras } from "./components/ChartExtras";
+import { type ChartLine, type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SignalsPanel } from "./components/SignalsPanel";
@@ -160,6 +161,27 @@ export default function App() {
     ? streamedHistory : candlesApi.data;
   const candles = useMemo(() => mergeLiveHistory(history, live.feed?.updates ?? []), [history, live.feed?.updates]);
   const gap = market === "crypto" && hasGap(candles, TF_MS[tf]);
+
+  const levelsApi = useApi(
+    selected ? () => api.levels(selected.market, selected.symbol) : null,
+    [selected?.market, selected?.symbol],
+  );
+  const plansActiveApi = useApi(
+    selected ? () => api.plansActive(selected.market, selected.symbol) : null,
+    [selected?.market, selected?.symbol],
+    60_000,
+  );
+  const chartLines = useMemo<ChartLine[]>(
+    () => [
+      ...(levelsApi.data ?? []).map((l) => ({ price: l.price, label: l.label || "уровень", kind: "level" as const })),
+      ...(plansActiveApi.data ?? []).flatMap((p) => [
+        { price: p.entry, label: `План №${p.id}: вход`, kind: "entry" as const },
+        { price: p.stop, label: `План №${p.id}: стоп`, kind: "stop" as const },
+        ...(p.target != null ? [{ price: p.target, label: `План №${p.id}: цель`, kind: "target" as const }] : []),
+      ]),
+    ],
+    [levelsApi.data, plansActiveApi.data],
+  );
 
   const journalApi = useApi(
     selected ? () => api.journal({ market: selected.market, symbol: selected.symbol, mode: journalMode }) : null,
@@ -380,6 +402,7 @@ export default function App() {
                 overlays={overlays}
                 theme={theme}
                 resetKey={`${selected.market}:${selected.symbol}:${tf}`}
+                lines={chartLines}
               />
             ) : (
               <div className="chart-empty">
@@ -407,6 +430,17 @@ export default function App() {
               </div>
             )}
           </div>
+          {selected && (
+            <ChartExtras
+              instrument={selected}
+              marketInfo={marketInfo}
+              tf={tf}
+              lastPrice={last?.c}
+              levels={levelsApi.data ?? []}
+              onLevelsChanged={() => levelsApi.reload()}
+              theme={theme}
+            />
+          )}
         </main>
 
         {rightOpen && <div className="scrim" onClick={() => setRightOpen(false)} aria-hidden="true" />}

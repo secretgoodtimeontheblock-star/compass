@@ -27,6 +27,7 @@ from compass.cache import CandleCache
 from compass.data_quality import check_candles
 from compass.experiments import Experiment, ExperimentLog, multiple_testing_warning
 from compass.journal import MODES, Entry, Journal
+from compass.levels import Level, LevelStore
 from compass.live import OkxLive, history_dto, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import Instrument, InstrumentInfo, closed_candles
@@ -83,6 +84,7 @@ class Services:
     experiments: ExperimentLog | None = None
     accounts: AccountStore | None = None
     replay: ReplayStore | None = None
+    levels: LevelStore | None = None
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -117,6 +119,13 @@ class PlanRequest(BaseModel):
     available: float | None = None
     fee_pct: float | None = None
     slippage_pct: float | None = None
+
+
+class LevelRequest(BaseModel):
+    market: str
+    symbol: str
+    price: float = Field(gt=0)
+    label: str = Field("", max_length=60)
 
 
 class WatchItem(BaseModel):
@@ -694,6 +703,33 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
         }
 
+    # --- сохранённые уровни ---
+
+    def level_store() -> LevelStore:
+        if svc.levels is None:
+            raise HTTPException(503, "Хранилище уровней недоступно")
+        return svc.levels
+
+    @app.get("/api/levels")
+    def levels_list(market: str, symbol: str, deleted: bool = False) -> list[dict]:
+        return [asdict(x) for x in level_store().list(market, symbol, deleted)]
+
+    @app.post("/api/levels", status_code=201)
+    def levels_add(req: LevelRequest) -> dict:
+        adapter(req.market)
+        return asdict(level_store().add(Level(req.market, req.symbol, req.price, req.label)))
+
+    @app.delete("/api/levels/{level_id}", status_code=204)
+    def levels_remove(level_id: int) -> None:
+        if not level_store().remove(level_id):
+            raise HTTPException(404, "Уровня нет")
+
+    @app.post("/api/levels/{level_id}/restore")
+    def levels_restore(level_id: int) -> dict:
+        if not level_store().restore(level_id):
+            raise HTTPException(404, "Удалённого уровня с таким номером нет")
+        return {"restored": level_id}
+
     # --- планы сделок ---
 
     def plan_store() -> PlanStore:
@@ -752,6 +788,17 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     @app.get("/api/plans")
     def plan_list(market: str | None = None, symbol: str | None = None, limit: int = Query(100, ge=1, le=500)) -> list[dict]:
         return [plan_dto(p) for p in plan_store().list(market, symbol, limit)]
+
+    @app.get("/api/plans-active")
+    def plans_active(market: str, symbol: str) -> list[dict]:
+        """Планы по тикеру, которые ещё не закрыты (вход не выполнен или позиция открыта): их линии рисуются на графике."""
+        entries = svc.journal.list(market, symbol, mode=None)
+        out = []
+        for p in plan_store().list(market, symbol, 50):
+            status = review(p, entries)["status"]
+            if status != "closed":
+                out.append({**plan_dto(p), "status": status})
+        return out
 
     @app.get("/api/plans/{plan_id}")
     def plan_get(plan_id: int) -> dict:
