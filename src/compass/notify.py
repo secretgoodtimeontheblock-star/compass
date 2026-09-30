@@ -29,6 +29,17 @@ def format_signal(s: Signal) -> str:
     return f"{head}\nСтратегия: {name}\n{body}\n{DISCLAIMER}"
 
 
+def format_digest(signals: list[Signal]) -> str:
+    lines = [f"🔔 Сигналы, накопившиеся за тихие часы: {len(signals)}"]
+    for s in signals[:10]:
+        lines.append(f"{'🟢 вход' if s.side == 'buy' else '🔴 выход'}: {s.symbol} ({s.tf}) по {s.price:g}")
+    if len(signals) > 10:
+        lines.append(f"…и ещё {len(signals) - 10}")
+    lines.append("Подробности — в приложении.")
+    lines.append(DISCLAIMER)
+    return "\n".join(lines)
+
+
 class Notifier(Protocol):
     def send(self, signal: Signal) -> None: ...
 
@@ -51,7 +62,12 @@ class TelegramNotifier:
         return bool(self._token and self._chat)
 
     def send(self, signal: Signal) -> None:
-        text = format_signal(signal)
+        self._post(format_signal(signal))
+
+    def send_digest(self, signals: list[Signal]) -> None:
+        self._post(format_digest(signals))
+
+    def _post(self, text: str) -> None:
         if not self.enabled:
             log.info("[telegram dry-run]\n%s", text)
             return
@@ -75,5 +91,17 @@ class CompositeNotifier:
         for n in self._notifiers:
             try:
                 n.send(signal)
+            except Exception:
+                log.exception("Сбой канала уведомлений %s", type(n).__name__)
+
+    def send_digest(self, signals: list[Signal]) -> None:
+        for n in self._notifiers:
+            try:
+                digest = getattr(n, "send_digest", None)
+                if digest is not None:
+                    digest(signals)
+                else:
+                    for s in signals:
+                        n.send(s)
             except Exception:
                 log.exception("Сбой канала уведомлений %s", type(n).__name__)

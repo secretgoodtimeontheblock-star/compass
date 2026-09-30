@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _V1 = """
 CREATE TABLE candles (
@@ -187,6 +187,21 @@ VALUES (
 );
 """
 
+# Сигналы: когда уведомили (NULL — ещё нет, например из-за тихих часов) и когда пользователь их отклонил.
+# scan_state: чем закончилась последняя проверка каждого инструмента — из этого видно, какие источники подводят.
+_V12 = """
+ALTER TABLE signals ADD COLUMN notified_at INTEGER;
+ALTER TABLE signals ADD COLUMN dismissed_at INTEGER;
+UPDATE signals SET notified_at = created_at;
+CREATE TABLE scan_state (
+  market TEXT NOT NULL, symbol TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ok','stale','error','short','paused')),
+  message TEXT NOT NULL DEFAULT '',
+  last_scan_at INTEGER NOT NULL, last_ok_at INTEGER,
+  PRIMARY KEY (market, symbol)
+);
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -272,4 +287,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 11:
         conn.executescript(_V11)
         conn.execute("PRAGMA user_version = 11")
+        conn.commit()
+    if version < 12:
+        conn.executescript(_V12)
+        conn.execute("PRAGMA user_version = 12")
         conn.commit()

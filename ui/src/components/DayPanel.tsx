@@ -1,11 +1,12 @@
 import { api } from "../api";
 import { fmtNum, pnlClass } from "../lib/format";
 import { useApi } from "../lib/use-api";
-import type { AccountSnapshot } from "../types";
+import type { AccountSnapshot, WatchStatus } from "../types";
 
 /** Панель дня: по каждому счёту отдельно, без сложения рублей и USDT. */
 export function DayPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const day = useApi(() => api.day(), [refreshKey], 60_000);
+  const watch = useApi(() => api.watch(), [refreshKey], 60_000);
   const accounts = day.data?.accounts ?? [];
   if (day.error && accounts.length === 0) return <div className="notice">Панель дня недоступна: {day.error}</div>;
   if (accounts.length === 0) return null;
@@ -14,6 +15,13 @@ export function DayPanel({ refreshKey = 0 }: { refreshKey?: number }) {
       <div className="panel-head" style={{ padding: "0 0 4px" }}>
         Панель дня
       </div>
+      {watch.data && <WatchLine w={watch.data} />}
+      {(day.data?.problem_sources ?? []).map((p) => (
+        <div className="error" key={`${p.market}${p.symbol}`} style={{ marginBottom: 6 }}>
+          Источник {p.symbol}: {p.status === "stale" ? "данные не обновляются, сигналы по нему приостановлены" : "ошибка"}
+          {p.message ? ` (${p.message})` : ""}
+        </div>
+      ))}
       {accounts.map((a) => (
         <AccountCard key={a.market} a={a} />
       ))}
@@ -67,6 +75,32 @@ function AccountCard({ a }: { a: AccountSnapshot }) {
           {w}
         </div>
       ))}
+    </div>
+  );
+}
+
+const hhmm = (sec: number | null) =>
+  sec == null ? "—" : new Date(sec * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+function WatchLine({ w }: { w: WatchStatus }) {
+  const paused = w.instruments.filter((i) => i.paused).length;
+  return (
+    <div className="card">
+      <div className="row">
+        <b>Наблюдение</b>
+        <span className={w.background_scanner ? "up" : "down"}>{w.background_scanner ? "идёт" : "не идёт"}</span>
+      </div>
+      <div className="muted num">
+        Каждые {w.interval_min} мин · последняя проверка {hhmm(w.last_scan_at)} · следующая {hhmm(w.next_scan_at)}
+        {paused > 0 ? ` · на паузе: ${paused}` : ""}
+      </div>
+      {w.quiet_hours.enabled && (
+        <div className="muted">
+          Тихие часы {w.quiet_hours.from}–{w.quiet_hours.to}
+          {w.quiet_hours.active_now ? ": сейчас действуют, уведомления откладываются" : ""}
+        </div>
+      )}
+      <p className="caveat" style={{ margin: "4px 0 0" }}>{w.notes[0]}</p>
     </div>
   );
 }

@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +29,12 @@ DEFAULTS: dict[str, Any] = {
     # «рынок|тикер» → стратегия и параметры, которыми и сканер, и бэктест пользуются для этого инструмента.
     # Пусто — сканер проверяет все стратегии с параметрами по умолчанию.
     "instrument_strategies": {},
+    # сколько свечей после закрытия сигнал считается актуальным; потом получает статус «устарел»
+    "signal_valid_bars": 3,
+    # тихие часы: сигналы сохраняются и видны в ленте, но внешние уведомления откладываются до их конца
+    "quiet_hours": {"enabled": False, "from": "22:00", "to": "08:00"},
+    # «рынок|тикер», по которым наблюдение приостановлено
+    "paused_instruments": [],
 }
 
 
@@ -70,6 +77,9 @@ class Settings:
             "ai_models": _ai_models,
             "ai_consent": lambda v: v if v == "" else _choice(v, "Согласие AI", AI_PROVIDERS[1:]),
             "instrument_strategies": _instrument_strategies,
+            "signal_valid_bars": lambda v: _int(v, "Срок сигнала, свечей", 1, 50),
+            "quiet_hours": _quiet_hours,
+            "paused_instruments": _paused,
         }
         return checks[key](value)
 
@@ -140,3 +150,27 @@ def _int(v: Any, label: str, lo: int, hi: int) -> int:
     if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
         raise ValueError(f"{label}: целое число от {lo} до {hi}")
     return v
+
+
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _quiet_hours(v: Any) -> dict[str, Any]:
+    if not isinstance(v, dict) or set(v) - {"enabled", "from", "to"}:
+        raise ValueError("Тихие часы: объект с полями enabled, from, to")
+    cur = DEFAULTS["quiet_hours"]
+    out = {**cur, **v}
+    if not isinstance(out["enabled"], bool):
+        raise ValueError("Тихие часы: enabled — да или нет")  # noqa: TRY004
+    for key in ("from", "to"):
+        if not isinstance(out[key], str) or not _HHMM.match(out[key]):
+            raise ValueError("Тихие часы: время в формате ЧЧ:ММ")
+    if out["enabled"] and out["from"] == out["to"]:
+        raise ValueError("Тихие часы: начало и конец не должны совпадать")
+    return out
+
+
+def _paused(v: Any) -> list[str]:
+    if not isinstance(v, list) or not all(isinstance(k, str) and k.count("|") == 1 and all(k.split("|")) for k in v):
+        raise ValueError("Пауза наблюдения: список «рынок|тикер»")
+    return sorted(set(v))

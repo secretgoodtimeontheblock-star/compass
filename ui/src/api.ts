@@ -22,6 +22,7 @@ import type {
   Settings,
   Signal,
   Strategy,
+  WatchStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -91,6 +92,9 @@ export const api = {
 
   signals: (p: { limit?: number; unseen?: boolean; market?: MarketId; symbol?: string } = {}) =>
     request<Signal[]>(`/api/signals?${qs(p)}`),
+  watch: () => request<WatchStatus>("/api/watch"),
+  dismissSignal: (id: number) => request<Signal>(`/api/signals/${id}/dismiss`, { method: "POST" }),
+  restoreSignal: (id: number) => request<Signal>(`/api/signals/${id}/restore`, { method: "POST" }),
   markSeen: () => request<{ marked: number }>("/api/signals/seen", { method: "POST" }),
   scan: () => request<ScanResponse>("/api/scan", { method: "POST" }),
 

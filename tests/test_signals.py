@@ -38,7 +38,9 @@ def test_breakout_on_last_closed_candle_creates_buy_with_stop(env: Env) -> None:
     (s,) = donchian(res.new)
     assert s.side == "buy" and s.price == 12.0 and s.candle_ts == 25 * DAY
     assert s.stop is not None and 0 < s.stop < s.price
-    assert donchian(env.notifier.sent) == [s]
+    (sent,) = donchian(env.notifier.sent)
+    assert (sent.symbol, sent.candle_ts, sent.side, sent.price) == (s.symbol, s.candle_ts, s.side, s.price)
+    assert sent.id is not None  # уведомление уходит с сигналом из базы, у него есть номер
 
 
 def test_rescan_does_not_duplicate_or_renotify(env: Env) -> None:

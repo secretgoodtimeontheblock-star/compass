@@ -146,6 +146,14 @@ class Journal:
         with self._lock:
             return [Entry(*r) for r in self._conn.execute(sql, args).fetchall()]
 
+    def signal_ids(self) -> set[int]:
+        """Сигналы, по которым есть действующая запись журнала."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT signal_id FROM journal WHERE signal_id IS NOT NULL AND deleted_at IS NULL"
+            ).fetchall()
+        return {r[0] for r in rows}
+
     def deleted(self) -> list[Entry]:
         with self._lock:
             rows = self._conn.execute(

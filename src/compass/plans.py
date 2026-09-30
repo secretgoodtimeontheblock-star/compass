@@ -94,6 +94,11 @@ class PlanStore:
             row = self._conn.execute(f"SELECT {_COLUMNS} FROM plans WHERE id = ?", (plan_id,)).fetchone()
         return _row(row) if row else None
 
+    def signal_ids(self) -> set[int]:
+        with self._lock:
+            rows = self._conn.execute("SELECT DISTINCT signal_id FROM plans WHERE signal_id IS NOT NULL").fetchall()
+        return {r[0] for r in rows}
+
     def get_by_uid(self, uid: str) -> Plan | None:
         with self._lock:
             row = self._conn.execute(f"SELECT {_COLUMNS} FROM plans WHERE uid = ?", (uid,)).fetchone()

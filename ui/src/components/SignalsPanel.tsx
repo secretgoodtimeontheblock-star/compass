@@ -13,11 +13,21 @@ interface Props {
   onSelect: (i: Instrument) => void;
   onMarkSeen: () => void;
   onRecord: (draft: JournalDraft) => void;
+  onChanged: () => void;
 }
 
-export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkSeen, onRecord }: Props) {
+const STATUS_LABEL: Record<Signal["status"], string> = {
+  active: "Актуален",
+  expired: "Устарел",
+  acted: "Есть план или запись в журнале",
+  dismissed: "Отклонён",
+};
+
+export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkSeen, onRecord, onChanged }: Props) {
   const [onlySelected, setOnlySelected] = useState(false);
-  const list = onlySelected && selected ? signals.filter((s) => s.symbol === selected.symbol) : signals;
+  const [onlyActive, setOnlyActive] = useState(true);
+  const byInstrument = onlySelected && selected ? signals.filter((s) => s.symbol === selected.symbol) : signals;
+  const list = onlyActive ? byInstrument.filter((s) => s.status === "active") : byInstrument;
 
   return (
     <>
@@ -25,6 +35,10 @@ export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkS
         <label style={{ display: "inline-flex", gap: 6, fontWeight: 400, alignItems: "center" }}>
           <input type="checkbox" checked={onlySelected} onChange={(e) => setOnlySelected(e.target.checked)} />
           Только {selected?.symbol ?? "выбранный тикер"}
+        </label>
+        <label style={{ display: "inline-flex", gap: 6, fontWeight: 400, alignItems: "center" }}>
+          <input type="checkbox" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} />
+          Только актуальные
         </label>
         <button className="btn small" disabled={unseenCount === 0} onClick={onMarkSeen}>
           Прочитано{unseenCount > 0 ? ` (${unseenCount})` : ""}
@@ -34,13 +48,13 @@ export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkS
         <DayPanel refreshKey={signals.length} />
         {list.length === 0 && (
           <div className="empty">
-            <b>Сигналов пока нет.</b> Добавьте тикеры в избранное и нажмите «Проверить сигналы»: приложение
+            <b>{onlyActive && byInstrument.length > 0 ? "Актуальных сигналов нет." : "Сигналов пока нет."}</b> Добавьте тикеры в избранное и нажмите «Проверить сигналы»: приложение
             проверяет их само по расписанию, а сигнал появляется только когда стратегия меняет решение на
             закрытой свече.
           </div>
         )}
         {list.map((s) => (
-          <SignalCard key={s.id} s={s} onSelect={onSelect} onRecord={onRecord} />
+          <SignalCard key={s.id} s={s} onSelect={onSelect} onRecord={onRecord} onChanged={onChanged} />
         ))}
       </div>
     </>
@@ -51,10 +65,12 @@ function SignalCard({
   s,
   onSelect,
   onRecord,
+  onChanged,
 }: {
   s: Signal;
   onSelect: (i: Instrument) => void;
   onRecord: (draft: JournalDraft) => void;
+  onChanged: () => void;
 }) {
   const ai = useAiRun();
   const explain = (refresh = false) => void ai.run((r) => api.explainSignal(s.id, r), refresh);
@@ -65,6 +81,15 @@ function SignalCard({
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("Вход по сигналу");
   const buy = s.side === "buy";
+
+  const act = async (fn: (id: number) => Promise<Signal>) => {
+    try {
+      await fn(s.id);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Не удалось изменить сигнал");
+    }
+  };
 
   const calc = async () => {
     if (s.stop == null) return;
@@ -113,6 +138,19 @@ function SignalCard({
           {s.symbol}
         </button>
         <span className={`side-tag ${buy ? "up" : "down"}`}>{buy ? "ВХОД" : "ВЫХОД"}</span>
+      </div>
+      <div className="muted" style={{ fontSize: 12 }}>
+        {STATUS_LABEL[s.status]}
+        {s.status === "active" ? ` до ${fmtDateTime(s.expires_at)}` : ""}
+        {s.status === "dismissed" ? (
+          <button className="btn ghost small" style={{ marginLeft: 6 }} onClick={() => void act(api.restoreSignal)}>
+            Вернуть
+          </button>
+        ) : s.status !== "acted" ? (
+          <button className="btn ghost small" style={{ marginLeft: 6 }} onClick={() => void act(api.dismissSignal)}>
+            Отклонить
+          </button>
+        ) : null}
       </div>
       <div className="muted" style={{ fontSize: 12 }}>
         {STRATEGY_SHORT[s.strategy] ?? s.strategy} · {s.tf} · {fmtDateTime(s.candle_ts)}

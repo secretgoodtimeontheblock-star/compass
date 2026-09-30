@@ -63,6 +63,31 @@ export interface Signal {
   stop: number | null;
   created_at: number; // секунды
   seen: boolean;
+  status: "active" | "expired" | "acted" | "dismissed";
+  expires_at: number; // мс
+  notified_at: number | null;
+  dismissed_at: number | null;
+}
+
+export interface WatchInstrument {
+  market: MarketId;
+  symbol: string;
+  paused: boolean;
+  status: "ok" | "stale" | "error" | "short" | "paused" | "unknown";
+  message: string;
+  last_scan_at: number | null;
+  last_ok_at: number | null;
+}
+
+export interface WatchStatus {
+  background_scanner: boolean;
+  interval_min: number;
+  last_scan_at: number | null;
+  next_scan_at: number | null;
+  quiet_hours: { enabled: boolean; from: string; to: string; active_now: boolean };
+  signal_valid_bars: number;
+  instruments: WatchInstrument[];
+  notes: string[];
 }
 
 export interface StrategyParam {
@@ -212,6 +237,9 @@ export interface Settings {
   ai_models: Partial<Record<AiProviderId, string>>;
   ai_consent: string;
   instrument_strategies: Record<string, { strategy: string; params: Record<string, number> }>;
+  signal_valid_bars: number;
+  quiet_hours: { enabled: boolean; from: string; to: string };
+  paused_instruments: string[];
 }
 
 export interface JournalDraft {
@@ -454,5 +482,6 @@ export interface AccountSnapshot {
 export interface DayResponse {
   accounts: AccountSnapshot[];
   unseen_signals: number;
+  problem_sources: { market: MarketId; symbol: string; status: string; message: string }[];
   notes: string[];
 }

@@ -122,6 +122,19 @@ export default function App() {
 
   const markets = marketsApi.data ?? [];
   const settings = settingsOverride ?? settingsApi.data;
+
+  const togglePause = async (i: Instrument) => {
+    if (!settings) return;
+    const key = `${i.market}|${i.symbol}`;
+    const cur = new Set(settings.paused_instruments ?? []);
+    if (cur.has(key)) cur.delete(key);
+    else cur.add(key);
+    try {
+      setSettingsOverride(await api.saveSettings({ paused_instruments: [...cur] }));
+    } catch {
+      // ошибка сохранения не должна ломать список; состояние останется прежним
+    }
+  };
   const marketInfo = markets.find((m) => m.id === market);
   const items = useMemo(() => (watchApi.data ?? []).filter((i) => i.market === market), [watchApi.data, market]);
 
@@ -290,6 +303,8 @@ export default function App() {
             onSelect={selectInstrument}
             onRemove={removeFromWatch}
             onQuickAdd={addToWatch}
+            paused={new Set(settings?.paused_instruments ?? [])}
+            onTogglePause={togglePause}
           />
         </aside>
 
@@ -422,6 +437,7 @@ export default function App() {
               unseenCount={unseen.length}
               onSelect={selectInstrument}
               onMarkSeen={markSeen}
+              onChanged={() => signalsApi.reload()}
               onRecord={(draft) => {
                 selectInstrument({ market: draft.market, symbol: draft.symbol, name: draft.symbol });
                 setJournalDraft(draft);

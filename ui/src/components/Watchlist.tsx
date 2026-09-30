@@ -25,9 +25,11 @@ interface Props {
   onSelect: (i: Instrument) => void;
   onRemove: (i: Instrument) => void;
   onQuickAdd: (i: Instrument) => void;
+  paused: Set<string>;
+  onTogglePause: (i: Instrument) => void;
 }
 
-export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd }: Props) {
+export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd, paused, onTogglePause }: Props) {
   const have = new Set(items.map((i) => i.symbol));
   const quick = QUICK[market].filter((q) => !have.has(q.symbol));
 
@@ -52,6 +54,14 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
               >
                 <span className="sym">{i.symbol}</span>
                 {i.name !== i.symbol && <span className="nm">{i.name}</span>}
+              </button>
+              <button
+                className="btn ghost small"
+                aria-pressed={paused.has(`${i.market}|${i.symbol}`)}
+                title="Приостановить поиск сигналов по этому тикеру"
+                onClick={() => onTogglePause(i)}
+              >
+                {paused.has(`${i.market}|${i.symbol}`) ? "На паузе" : "Пауза"}
               </button>
               <button
                 className="icon-btn watch-remove"

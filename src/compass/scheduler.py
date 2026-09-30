@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from compass.settings import Settings
 from compass.signals import SignalEngine
@@ -17,6 +18,7 @@ class BackgroundScanner:
         self._engine, self._settings, self._first_delay = engine, settings, first_delay_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.next_scan_at: int | None = None  # секунды UTC, когда фон проверит снова
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -25,6 +27,10 @@ class BackgroundScanner:
         self._thread = threading.Thread(target=self._run, name="compass-scanner", daemon=True)
         self._thread.start()
 
+    @property
+    def alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread:
@@ -32,6 +38,7 @@ class BackgroundScanner:
 
     def _run(self) -> None:
         wait = self._first_delay
+        self.next_scan_at = int(time.time() + wait)
         while not self._stop.wait(wait):
             try:
                 res = self._engine.scan()
@@ -41,3 +48,4 @@ class BackgroundScanner:
                 log.exception("Сбой скана")
             # интервал читаем каждый раз: пользователь мог поменять его в настройках
             wait = float(self._settings.get("scan_interval_min")) * 60
+            self.next_scan_at = int(time.time() + wait)

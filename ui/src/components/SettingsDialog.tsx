@@ -17,7 +17,9 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
     scan_interval_min: String(settings.scan_interval_min),
     tf_moex: settings.tf_moex,
     tf_crypto: settings.tf_crypto,
+    signal_valid_bars: String(settings.signal_valid_bars ?? 3),
   });
+  const [quiet, setQuiet] = useState(settings.quiet_hours ?? { enabled: false, from: "22:00", to: "08:00" });
   const [aiProvider, setAiProvider] = useState<AiProviderId>(settings.ai_provider);
   const [aiModels, setAiModels] = useState<Partial<Record<AiProviderId, string>>>(settings.ai_models ?? {});
   const [modelList, setModelList] = useState<AiModel[]>([]);
@@ -55,6 +57,8 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
           scan_interval_min: Number(draft.scan_interval_min),
           tf_moex: draft.tf_moex,
           tf_crypto: draft.tf_crypto,
+          signal_valid_bars: Number(draft.signal_valid_bars),
+          quiet_hours: quiet,
           ai_provider: aiProvider,
           ai_models: aiModels,
         }),
@@ -96,6 +100,26 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
               ))}
             </select>
           </label>
+          <label className="field">
+            <span>Сигнал актуален, свечей</span>
+            <input type="number" min={1} max={50} value={draft.signal_valid_bars} onChange={(e) => setDraft({ ...draft, signal_valid_bars: e.target.value })} />
+          </label>
+          <label className="field" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={quiet.enabled} onChange={(e) => setQuiet({ ...quiet, enabled: e.target.checked })} />
+            <span>Тихие часы (без внешних уведомлений)</span>
+          </label>
+          {quiet.enabled && (
+            <>
+              <label className="field">
+                <span>С</span>
+                <input type="time" value={quiet.from} onChange={(e) => setQuiet({ ...quiet, from: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>До</span>
+                <input type="time" value={quiet.to} onChange={(e) => setQuiet({ ...quiet, to: e.target.value })} />
+              </label>
+            </>
+          )}
           <label className="field full">
             <span>Как часто искать сигналы, минут</span>
             <input

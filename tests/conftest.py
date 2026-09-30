@@ -63,9 +63,13 @@ class ScriptedAdapter:
 @dataclass
 class RecordingNotifier:
     sent: list[Signal] = field(default_factory=list)
+    digests: list[list[Signal]] = field(default_factory=list)
 
     def send(self, signal: Signal) -> None:
         self.sent.append(signal)
+
+    def send_digest(self, signals: list[Signal]) -> None:
+        self.digests.append(list(signals))
 
 
 class FakeProvider:

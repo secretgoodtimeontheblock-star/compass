@@ -33,7 +33,14 @@ from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
-from compass.signals import Signal, SignalEngine, SignalStore
+from compass.signals import (
+    Signal,
+    SignalEngine,
+    SignalStore,
+    in_quiet_hours,
+    signal_expires_at,
+    signal_status,
+)
 from compass.strategies import STRATEGIES, candles_to_df, strategy_version
 from compass.validation import (
     apply_sample_rules,
@@ -443,8 +450,30 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         unseen: bool = False,
         market: str | None = None,
         symbol: str | None = None,
+        status: str | None = None,
     ) -> list[dict]:
-        return [_signal_dto(s) for s in svc.signals.list(limit, unseen, market, symbol)]
+        if status is not None and status not in ("active", "expired", "acted", "dismissed"):
+            raise ValueError("Статус сигнала — active, expired, acted или dismissed")
+        ctx = signal_ctx()
+        # при фильтре по статусу берём с запасом: срок и «действовали» вычисляются при чтении, а не хранятся
+        rows = svc.signals.list(500 if status else limit, unseen, market, symbol)
+        out = [signal_dto(s, ctx) for s in rows]
+        return [d for d in out if d["status"] == status][:limit] if status else out
+
+    @app.post("/api/signals/{signal_id}/dismiss")
+    def signal_dismiss(signal_id: int) -> dict:
+        """Отклонить сигнал: он не считается актуальным и не будет рассылаться. Обратимо."""
+        if svc.signals.get(signal_id) is None:
+            raise HTTPException(404, "Сигнал не найден")
+        svc.signals.dismiss(signal_id, svc.now_ms() // 1000)
+        return signal_dto(svc.signals.get(signal_id), signal_ctx())
+
+    @app.post("/api/signals/{signal_id}/restore")
+    def signal_restore(signal_id: int) -> dict:
+        if svc.signals.get(signal_id) is None:
+            raise HTTPException(404, "Сигнал не найден")
+        svc.signals.undismiss(signal_id)
+        return signal_dto(svc.signals.get(signal_id), signal_ctx())
 
     @app.post("/api/signals/seen")
     def signals_seen() -> dict:
@@ -453,7 +482,54 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     @app.post("/api/scan")
     def scan_now() -> dict:
         r = svc.engine.scan()
-        return {"new": [_signal_dto(s) for s in r.new], "errors": r.errors}
+        ctx = signal_ctx()
+        stored = {(x.market, x.symbol, x.tf, x.strategy, x.candle_ts, x.side): x for x in svc.signals.list(500)}
+        new = [stored.get((s.market, s.symbol, s.tf, s.strategy, s.candle_ts, s.side), s) for s in r.new]
+        return {"new": [signal_dto(s, ctx) for s in new], "errors": r.errors}
+
+    def signal_ctx() -> dict:
+        acted = svc.journal.signal_ids() | (svc.plans.signal_ids() if svc.plans else set())
+        return {"now": svc.now_ms(), "valid": svc.settings.get("signal_valid_bars"), "acted": acted}
+
+    def signal_dto(s: Signal, ctx: dict) -> dict:
+        d = asdict(s)
+        d["status"] = signal_status(s, ctx["now"], ctx["valid"], s.id in ctx["acted"])
+        d["expires_at"] = signal_expires_at(s, ctx["valid"])
+        return d
+
+    @app.get("/api/watch")
+    def watch_status() -> dict:
+        """Что и как наблюдается. Фонового режима нет: проверка идёт только пока приложение запущено."""
+        cfg = svc.settings.all()
+        now = svc.now_ms()
+        sc = svc.scanner
+        states = {(x["market"], x["symbol"]): x for x in svc.signals.states()}
+        items = []
+        for inst in svc.watchlist.list():
+            st = states.get((inst.market, inst.symbol))
+            paused = f"{inst.market}|{inst.symbol}" in cfg["paused_instruments"]
+            items.append({
+                "market": inst.market, "symbol": inst.symbol, "paused": paused,
+                "status": "paused" if paused else (st["status"] if st else "unknown"),
+                "message": "" if not st else st["message"], "last_scan_at": st and st["last_scan_at"],
+                "last_ok_at": st and st["last_ok_at"],
+            })
+        return {
+            "background_scanner": bool(sc and sc.alive),
+            "interval_min": cfg["scan_interval_min"],
+            "last_scan_at": svc.engine.last_scan_at,
+            "next_scan_at": sc.next_scan_at if sc and sc.alive else None,
+            "quiet_hours": {**cfg["quiet_hours"], "active_now": in_quiet_hours(cfg["quiet_hours"], now)},
+            "signal_valid_bars": cfg["signal_valid_bars"],
+            "instruments": items,
+            "notes": [
+                (
+                    "Наблюдение работает только при запущенном приложении: если закрыть Compass, сигналы не ищутся "
+                    "и уведомления не приходят. Отдельного фонового режима нет."
+                ),
+                "Сигнал появляется на закрытой свече; по незакрытой и по устаревшим данным сигналы не создаются.",
+            ],
+        }
 
     # --- риск и настройки ---
 
@@ -611,6 +687,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         return {
             "accounts": snaps,
             "unseen_signals": len(svc.signals.list(500, True)),
+            "problem_sources": [x for x in svc.signals.states() if x["status"] in ("stale", "error")],
             "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
         }
 
@@ -760,5 +837,3 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     return app
 
 
-def _signal_dto(s: Signal) -> dict:
-    return asdict(s)
