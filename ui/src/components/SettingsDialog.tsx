@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AiModel, AiProviderId, Market, Settings } from "../types";
+import { AccountsSection } from "./AccountsSection";
 import { Modal } from "./Modal";
 
 interface Props {
@@ -13,7 +14,6 @@ interface Props {
 export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
   const [draft, setDraft] = useState({
     capital: String(settings.capital),
-    risk_pct: String(settings.risk_pct),
     scan_interval_min: String(settings.scan_interval_min),
     tf_moex: settings.tf_moex,
     tf_crypto: settings.tf_crypto,
@@ -52,7 +52,6 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
       onSaved(
         await api.saveSettings({
           capital: Number(draft.capital),
-          risk_pct: Number(draft.risk_pct),
           scan_interval_min: Number(draft.scan_interval_min),
           tf_moex: draft.tf_moex,
           tf_crypto: draft.tf_crypto,
@@ -72,24 +71,13 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
     <Modal title="Настройки" onClose={onClose}>
         <div className="form-grid" style={{ padding: 0 }}>
           <label className="field">
-            <span>Капитал для расчёта позиции</span>
+            <span>Стартовый капитал бэктеста</span>
             <input
               data-autofocus
               type="number"
               min={1}
               value={draft.capital}
               onChange={(e) => setDraft({ ...draft, capital: e.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Риск на сделку, % капитала</span>
-            <input
-              type="number"
-              min={0.1}
-              max={100}
-              step={0.1}
-              value={draft.risk_pct}
-              onChange={(e) => setDraft({ ...draft, risk_pct: e.target.value })}
             />
           </label>
           <label className="field">
@@ -119,9 +107,10 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
             />
           </label>
         </div>
+        <AccountsSection />
         <p className="muted small-text">
           Риск 1–2% на сделку — общепринятая осторожная планка: размер позиции подбирается так, чтобы срабатывание
-          стопа стоило не больше этой доли капитала.
+          стопа стоило не больше этой доли капитала счёта.
         </p>
 
         <h3 className="dialog-section">AI-помощник</h3>

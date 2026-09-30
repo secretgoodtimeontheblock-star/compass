@@ -3,9 +3,11 @@ import type {
   AiProviderInfo,
   AiResult,
   AiStatus,
+  AccountDto,
   BacktestRequestBody,
   BacktestResponse,
   CandlesResponse,
+  DayResponse,
   Instrument,
   JournalEntry,
   JournalMode,
@@ -94,6 +96,10 @@ export const api = {
 
   risk: (b: { market: MarketId; symbol: string; entry: number; stop: number }) =>
     request<RiskResponse>("/api/risk", json("POST", b)),
+  accounts: () => request<AccountDto[]>("/api/accounts"),
+  updateAccount: (market: string, changes: Partial<Omit<AccountDto, "market" | "currency">>) =>
+    request<AccountDto>(`/api/accounts/${market}`, json("PUT", changes)),
+  day: () => request<DayResponse>("/api/day"),
   settings: () => request<Settings>("/api/settings"),
   saveSettings: (s: Partial<Settings>) => request<Settings>("/api/settings", json("PUT", s)),
 

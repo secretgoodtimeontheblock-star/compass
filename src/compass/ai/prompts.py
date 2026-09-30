@@ -114,8 +114,8 @@ def explain_signal(
     params: dict[str, int],
     snapshot: str | None,
     metrics: dict[str, float | int | None] | None,
-    capital: float,
-    risk_pct: float,
+    capital: float | None,
+    risk_pct: float | None,
 ) -> Prompt:
     side = "ВХОД (покупка)" if s.side == "buy" else "ВЫХОД (закрытие позиции)"
     facts = [
@@ -130,7 +130,8 @@ def explain_signal(
     ]
     if s.side == "buy":
         facts.append(f"ориентир стопа (цена − 2·ATR14): {_g(s.stop)}")
-        facts.append(f"настройки пользователя: капитал {_g(capital)}, риск на сделку {_g(risk_pct)}%")
+        if capital is not None and risk_pct is not None:
+            facts.append(f"настройки счёта пользователя: капитал {_g(capital)}, риск на сделку {_g(risk_pct)}%")
     parts = ["\n".join(facts)]
     if snapshot:
         parts.append("Текущая картина по инструменту:\n" + snapshot)

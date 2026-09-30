@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from compass import __version__, oos
+from compass import __version__, oos, portfolio
+from compass.accounts import Account, AccountStore
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
@@ -71,6 +72,7 @@ class Services:
     live: OkxLive | None = None
     plans: PlanStore | None = None
     experiments: ExperimentLog | None = None
+    accounts: AccountStore | None = None
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -472,9 +474,41 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     def instrument(market: str, symbol: str) -> dict:
         return asdict(instrument_info(market, symbol))
 
+    def account_for(market: str) -> Account:
+        acc = svc.accounts.get(market) if svc.accounts else None
+        if acc is None:
+            raise ValueError(f"Для рынка {market} нет счёта")
+        return acc
+
+    def correlated_open_positions(market: str, symbol: str, positions: list[dict]) -> dict:
+        """Корреляция дневных доходностей кандидата с открытыми позициями (по кэшу свечей; сбой источника — без вывода)."""
+        others = [p["symbol"] for p in positions if p["symbol"] != symbol]
+        if not others:
+            return {"items": [], "note": None}
+        try:
+            def closes(sym: str) -> dict[int, float]:
+                res = svc.cache.get(market, sym, "1d", 150)
+                return {c.ts: c.close for c in closed_candles(res.candles, "1d", svc.now_ms())}
+
+            items = portfolio.correlated_positions(closes(symbol), {s: closes(s) for s in others})
+            return {"items": items, "note": None}
+        except (MarketError, KeyError):
+            return {"items": [], "note": "Корреляцию с открытыми позициями проверить не удалось: нет данных."}
+
     def risk_calc(req: RiskRequest) -> dict:
         info = instrument_info(req.market, req.symbol)
-        cfg = svc.settings.all()
+        acc = account_for(req.market)
+        capital = req.capital if req.capital is not None else acc.capital
+        if capital is None:
+            raise ValueError(
+                f"Капитал счёта «{acc.name}» не задан: укажите его в настройках счёта ({acc.currency}). "
+                "Рубли и USDT не пересчитываются друг в друга."
+            )
+        risk_pct = req.risk_pct if req.risk_pct is not None else acc.risk_pct
+        snap = portfolio.snapshot(acc, svc.journal.list(market=req.market, mode="real"), svc.now_ms())
+        available = req.available
+        if available is None and snap["free"] is not None:
+            available = max(0.0, snap["free"])  # свободные средства с учётом открытых позиций и результата
         fee = req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1)
         slip = req.slippage_pct if req.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
         bond = info.price_unit == "percent_of_face"
@@ -482,21 +516,31 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             raise ValueError("Для облигации не получен номинал: посчитать размер позиции нельзя")
         is_crypto = req.market == "crypto"
         p = position_size(
-            req.capital if req.capital is not None else cfg["capital"],
-            req.risk_pct if req.risk_pct is not None else cfg["risk_pct"],
+            capital,
+            risk_pct,
             req.entry,
             req.stop,
             lot=info.lot,
             qty_step=(info.qty_step or CRYPTO_QTY_STEP) if is_crypto else None,
             fee_pct=fee,
             slippage_pct=slip,
-            available=req.available,
+            available=available,
             unit_value=info.face_value / 100 if bond and info.face_value else 1.0,
             accrued=info.accrued or 0.0,
             min_qty=info.min_qty,
             min_cost=info.min_cost,
         )
         warnings = [w for w in (p.warning,) if w]
+        pf = portfolio.assess_new_position(snap, acc, p.risk_amount, p.cost)
+        warnings.extend(pf["warnings"])
+        corr = correlated_open_positions(req.market, req.symbol, snap["positions"])
+        pf["correlated"] = corr["items"]
+        pf["correlation_note"] = corr["note"]
+        for c in corr["items"]:
+            warnings.append(
+                f"Доходности {req.symbol} и открытой позиции {c['symbol']} сильно совпадали в прошлом "
+                f"(корреляция {c['correlation']:g}): риск двух позиций фактически складывается."
+            )
         if not info.complete:
             warnings.append(
                 "Параметры инструмента получены не полностью"
@@ -517,6 +561,10 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             **asdict(p),
             "lot_size": info.lot,
             "currency": info.currency,
+            "account": {"market": acc.market, "name": acc.name, "currency": acc.currency},
+            "capital": capital,
+            "risk_pct": risk_pct,
+            "portfolio": pf,
             "unit_value": info.face_value / 100 if bond and info.face_value else 1.0,
             "fee_pct": fee,
             "slippage_pct": slip,
@@ -534,6 +582,37 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     @app.post("/api/risk")
     def risk(req: RiskRequest) -> dict:
         return risk_calc(req)
+
+    # --- счета и панель дня ---
+
+    def accounts_store() -> AccountStore:
+        if svc.accounts is None:
+            raise HTTPException(503, "Хранилище счетов недоступно")
+        return svc.accounts
+
+    @app.get("/api/accounts")
+    def accounts_list() -> list[dict]:
+        return [asdict(a) for a in accounts_store().list()]
+
+    @app.put("/api/accounts/{market}")
+    def accounts_update(market: str, changes: dict) -> dict:
+        try:
+            return asdict(accounts_store().update(market, changes))
+        except KeyError:
+            raise HTTPException(404, f"Счёта для рынка {market} нет") from None
+
+    @app.get("/api/day")
+    def day_panel() -> dict:
+        """Панель дня по каждому счёту отдельно: без сложения рублей и USDT."""
+        now = svc.now_ms()
+        snaps = [
+            portfolio.snapshot(a, svc.journal.list(market=a.market, mode="real"), now) for a in accounts_store().list()
+        ]
+        return {
+            "accounts": snaps,
+            "unseen_signals": len(svc.signals.list(500, True)),
+            "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
+        }
 
     # --- планы сделок ---
 
@@ -573,7 +652,6 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         )
         if r["qty"] <= 0:
             raise ValueError(r["warnings"][0] if r["warnings"] else "Покупать нечего: количество нулевое")
-        cfg = svc.settings.all()
         reward_risk = None
         if req.target is not None and req.entry > req.stop:
             reward_risk = round((req.target - req.entry) / (req.entry - req.stop), 2)
@@ -581,8 +659,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             Plan(
                 market=req.market, symbol=req.symbol, source=getattr(adapter(req.market), "source_id", req.market),
                 entry=req.entry, stop=req.stop, target=req.target, qty=r["qty"], lots=r["lots"],
-                capital=req.capital if req.capital is not None else cfg["capital"],
-                risk_pct=req.risk_pct if req.risk_pct is not None else cfg["risk_pct"],
+                capital=r["capital"], risk_pct=r["risk_pct"],
                 fee_pct=r["fee_pct"], slippage_pct=r["slippage_pct"], cost=r["cost"], risk_amount=r["risk_amount"],
                 risk_amount_worse=r["risk_amount_worse"], budget=r["budget"], strategy=strategy_id,
                 strategy_version=version, params=params, signal_id=req.signal_id, available=req.available,

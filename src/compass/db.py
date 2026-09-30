@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _V1 = """
 CREATE TABLE candles (
@@ -162,6 +162,31 @@ CREATE TRIGGER experiments_no_update BEFORE UPDATE ON experiments BEGIN SELECT R
 CREATE TRIGGER experiments_no_delete BEFORE DELETE ON experiments BEGIN SELECT RAISE(ABORT, 'Историю проверок нельзя удалить'); END;
 """
 
+# Счета: у каждого рынка свой счёт со своей валютой и лимитами. Рублёвый счёт наследует капитал и риск на сделку
+# из прежних настроек (если они были заданы); капитал USDT-счёта НЕ придумывается — рубли в USDT не превращаются.
+_V11 = """
+CREATE TABLE accounts (
+  market TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  capital REAL CHECK (capital IS NULL OR capital > 0),
+  risk_pct REAL NOT NULL DEFAULT 1 CHECK (risk_pct > 0 AND risk_pct <= 100),
+  daily_loss_limit_pct REAL NOT NULL DEFAULT 3 CHECK (daily_loss_limit_pct > 0 AND daily_loss_limit_pct <= 100),
+  max_open_risk_pct REAL NOT NULL DEFAULT 6 CHECK (max_open_risk_pct > 0 AND max_open_risk_pct <= 100)
+);
+INSERT INTO accounts (market, name, currency, capital, risk_pct)
+VALUES (
+  'moex', 'Рублёвый брокерский счёт', 'RUB',
+  COALESCE((SELECT NULLIF(CAST(value AS REAL), 0) FROM settings WHERE key = 'capital'), 100000.0),
+  COALESCE((SELECT NULLIF(CAST(value AS REAL), 0) FROM settings WHERE key = 'risk_pct'), 1.0)
+);
+INSERT INTO accounts (market, name, currency, capital, risk_pct)
+VALUES (
+  'crypto', 'Криптосчёт (USDT)', 'USDT', NULL,
+  COALESCE((SELECT NULLIF(CAST(value AS REAL), 0) FROM settings WHERE key = 'risk_pct'), 1.0)
+);
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -243,4 +268,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 10:
         conn.executescript(_V10)
         conn.execute("PRAGMA user_version = 10")
+        conn.commit()
+    if version < 11:
+        conn.executescript(_V11)
+        conn.execute("PRAGMA user_version = 11")
         conn.commit()

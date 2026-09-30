@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from compass.accounts import AccountStore
 from compass.ai.providers import ModelInfo
 from compass.ai.service import AiService
 from compass.api.app import Services
@@ -120,6 +121,7 @@ def env() -> Env:
         adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0],
         plans=PlanStore(conn),
         experiments=ExperimentLog(conn),
+        accounts=AccountStore(conn),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

@@ -284,7 +284,9 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
               <input type="number" min={0} step="any" value={qty} onChange={(e) => setQty(e.target.value)} />
             </label>
             <label className="field">
-              <span>Цена{lastPrice ? ` (сейчас ${fmtPrice(lastPrice)})` : ""}</span>
+              <span title="Деньги за единицу актива. Для облигаций — в рублях за бумагу, не в % номинала.">
+                Цена{lastPrice ? ` (сейчас ${fmtPrice(lastPrice)})` : ""}
+              </span>
               <input
                 type="number"
                 min={0}

@@ -78,7 +78,7 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
             raise HTTPException(404, f"Неизвестная стратегия: {sig.strategy}")
         legacy = sig.params is None  # сигнал создан до сохранения параметров
         params = strat.resolve(sig.params)
-        cfg = svc.settings.all()
+        acc = svc.accounts.get(sig.market) if svc.accounts else None
         snapshot = metrics = None
         warning = None
         try:  # без свежих данных объяснение остаётся, просто беднее
@@ -99,7 +99,7 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
                 "в объяснении и метриках использованы параметры по умолчанию."
             )
             warning = f"{warning} {note}" if warning else note
-        prompt = prompts.explain_signal(sig, strat, params, snapshot, metrics, cfg["capital"], cfg["risk_pct"])
+        prompt = prompts.explain_signal(sig, strat, params, snapshot, metrics, acc.capital if acc else None, acc.risk_pct if acc else None)
         return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))
 
     @app.post("/api/ai/review-journal")

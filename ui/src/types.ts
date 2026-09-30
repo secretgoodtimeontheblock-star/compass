@@ -192,6 +192,9 @@ export interface RiskResponse {
   warnings: string[];
   currency: string | null;
   lot_size: number;
+  capital: number;
+  risk_pct: number;
+  portfolio: { heat_before_pct: number | null; heat_after_pct: number | null; warnings: string[] };
   fee_pct: number;
   slippage_pct: number;
   assumptions: string[];
@@ -316,6 +319,8 @@ export interface PlanDto {
   reason: string;
   warnings: string[];
   assumptions?: string[];
+  capital: number;
+  risk_pct: number;
 }
 
 export interface PlanDeviation {
@@ -404,4 +409,50 @@ export interface OosResponse {
   strategy_version: string;
   warnings: string[];
   trials: { prior_variants: number; this_run_variants: number; total_variants: number; warning: string | null };
+}
+
+export interface AccountDto {
+  market: MarketId;
+  name: string;
+  currency: string;
+  capital: number | null;
+  risk_pct: number;
+  daily_loss_limit_pct: number;
+  max_open_risk_pct: number;
+}
+
+export interface AccountPosition {
+  symbol: string;
+  qty: number;
+  avg_price: number;
+  cost: number;
+  stop: number | null;
+  risk_at_stop: number | null;
+}
+
+export interface AccountSnapshot {
+  market: MarketId;
+  name: string;
+  currency: string;
+  capital: number | null;
+  equity: number | null;
+  free: number | null;
+  realized_total: number;
+  daily_pnl: number;
+  daily_limit: number | null;
+  daily_limit_breached: boolean;
+  exposure: number;
+  exposure_pct: number | null;
+  open_risk: number;
+  heat_pct: number | null;
+  max_open_risk_pct: number;
+  positions: AccountPosition[];
+  unprotected: string[];
+  warnings: string[];
+}
+
+export interface DayResponse {
+  accounts: AccountSnapshot[];
+  unseen_signals: number;
+  notes: string[];
 }
