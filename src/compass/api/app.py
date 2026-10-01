@@ -44,6 +44,7 @@ from compass.models import (
 from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
 from compass import execution
+from compass import cockpit as cockpit_mod
 from compass import lab as lab_mod
 from compass.integrity import integrity_report
 from compass.risk import WORSE_SLIPPAGE_MULT, position_size
@@ -939,6 +940,22 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "problem_sources": [x for x in svc.signals.states() if x["status"] in ("stale", "error")],
             "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
         }
+
+    @app.get("/api/cockpit")
+    def decision_cockpit() -> dict:
+        """Единый ответ на вопросы дня: что происходит, позиции, реальный риск, планы, сигналы, правила, данные.
+        Всё берётся из тех же источников, что и остальные экраны (Portfolio Truth, планы, сигналы)."""
+        accounts = [account_snapshot(a) for a in accounts_store().list()]
+        plans = []
+        if svc.plans is not None:
+            for p in svc.plans.list(None, None, 100):
+                rv = review(p, svc.journal.list(p.market, p.symbol, mode=None))
+                if rv["status"] != "closed":
+                    plans.append({**plan_dto(p), "review": rv})
+        ctx = signal_ctx()
+        active = [d for d in (signal_dto(s, ctx) for s in svc.signals.list(200)) if d["status"] == "active"]
+        problems = [x for x in svc.signals.states() if x["status"] in ("stale", "error")]
+        return cockpit_mod.build(accounts, plans, active, watch_status(), problems, svc.now_ms())
 
     @app.get("/api/review/week")
     def review_week(days: int = Query(7, ge=1, le=31)) -> dict:
