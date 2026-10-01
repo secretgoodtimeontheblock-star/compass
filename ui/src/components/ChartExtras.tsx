@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { fmtPrice } from "../lib/format";
 import { useApi } from "../lib/use-api";
-import type { Instrument, LevelDto, Market } from "../types";
+import type { AlertDto, Instrument, LevelDto, Market } from "../types";
 import { PriceChart } from "./PriceChart";
 
 const OFF = { sma20: false, sma50: false, volume: false };
@@ -25,6 +25,33 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
   const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<LevelDto>();
   const [second, setSecond] = useState(false);
+  const [alertPrice, setAlertPrice] = useState("");
+  const [alertNote, setAlertNote] = useState("");
+  const [alertError, setAlertError] = useState<string>();
+  const alertsApi = useApi(
+    () => api.alerts({ status: "active", market: instrument.market, symbol: instrument.symbol }),
+    [instrument.market, instrument.symbol],
+    60_000,
+  );
+  const addAlert = async () => {
+    setAlertError(undefined);
+    try {
+      await api.addAlert({ market: instrument.market, symbol: instrument.symbol, price: Number(alertPrice), note: alertNote });
+      setAlertPrice("");
+      setAlertNote("");
+      alertsApi.reload();
+    } catch (e) {
+      setAlertError(e instanceof Error ? e.message : "Не удалось поставить оповещение");
+    }
+  };
+  const cancelAlert = async (a: AlertDto) => {
+    try {
+      await api.cancelAlert(a.id);
+      alertsApi.reload();
+    } catch (e) {
+      setAlertError(e instanceof Error ? e.message : "Не удалось отменить оповещение");
+    }
+  };
   const tfs = marketInfo?.timeframes ?? [];
   const [tf2, setTf2] = useState("");
   const alternatives = tfs.filter((t) => t !== tf);
@@ -118,9 +145,23 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
           </select>
         )}
       </div>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4 }} data-testid="alerts">
+        <span className="muted">Оповестить, когда цена дойдёт до:</span>
+        {(alertsApi.data ?? []).map((a) => (
+          <span key={a.id} className="badge num" title={a.note || (a.kind === "above" ? "выше" : "ниже")}>
+            {a.kind === "above" ? "↑" : "↓"} {fmtPrice(a.price)}
+            {a.note ? ` · ${a.note}` : ""}
+            <button className="icon-btn" aria-label={`Отменить оповещение ${a.price}`} onClick={() => void cancelAlert(a)}>×</button>
+          </span>
+        ))}
+        <input type="number" min={0} step="any" value={alertPrice} placeholder="цена" aria-label="Цена оповещения" style={{ width: 90 }} onChange={(e) => setAlertPrice(e.target.value)} />
+        <input type="text" value={alertNote} maxLength={80} placeholder="заметка" aria-label="Заметка оповещения" style={{ width: 120 }} onChange={(e) => setAlertNote(e.target.value)} />
+        <button className="btn small" disabled={!alertPrice} onClick={() => void addAlert()}>Оповестить</button>
+      </div>
+      {alertError && <div className="error">{alertError}</div>}
       {error && <div className="error">{error}</div>}
       <p className="caveat" style={{ margin: "2px 0 0" }}>
-        Уровни — ваши пометки на графике, приложение не оценивает, удержатся ли они.
+        Оповещение придёт тостом и в Telegram (если настроен), пока приложение запущено; проверка раз в минуту. Уровни — ваши пометки на графике, приложение не оценивает, удержатся ли они.
       </p>
       {second && (
         <div style={{ position: "relative", height: 200, marginTop: 6 }}>

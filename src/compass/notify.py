@@ -70,6 +70,10 @@ class TelegramNotifier:
     def send_digest(self, signals: list[Signal]) -> None:
         self._post(format_digest(signals))
 
+    def send_text(self, text: str) -> None:
+        """Произвольное сообщение (оповещения о цене)."""
+        self._post(text)
+
     def _post(self, text: str) -> None:
         if not self.enabled:
             log.info("[telegram dry-run]\n%s", text)
@@ -94,6 +98,15 @@ class CompositeNotifier:
         for n in self._notifiers:
             try:
                 n.send(signal)
+            except Exception:
+                log.exception("Сбой канала уведомлений %s", type(n).__name__)
+
+    def send_text(self, text: str) -> None:
+        for n in self._notifiers:
+            try:
+                fn = getattr(n, "send_text", None)
+                if fn is not None:
+                    fn(text)
             except Exception:
                 log.exception("Сбой канала уведомлений %s", type(n).__name__)
 

@@ -2,6 +2,7 @@ import type {
   AiModel,
   AiProviderInfo,
   AiResult,
+  AlertDto,
   AiStatus,
   AccountDto,
   BacktestRequestBody,
@@ -103,6 +104,12 @@ export const api = {
   presets: (market: MarketId) => request<PresetGroup[]>(`/api/presets?${qs({ market })}`),
   addPreset: (market: MarketId, group: string) =>
     request<{ added: number; already: number; title: string }>(`/api/presets/${market}/${group}/add`, { method: "POST" }),
+  alerts: (p: { status?: string; market?: MarketId; symbol?: string; unseen?: boolean } = {}) =>
+    request<AlertDto[]>(`/api/alerts?${qs(p)}`),
+  addAlert: (b: { market: MarketId; symbol: string; price: number; note?: string; kind?: "above" | "below" }) =>
+    request<AlertDto & { last_price: number }>("/api/alerts", json("POST", b)),
+  cancelAlert: (id: number) => request<void>(`/api/alerts/${id}`, { method: "DELETE" }),
+  alertsSeen: () => request<{ marked: number }>("/api/alerts/seen", { method: "POST" }),
   cockpit: () => request<CockpitResponse>("/api/cockpit"),
   glossary: () => request<GlossaryTerm[]>("/api/glossary"),
   changed: (hours = 24) => request<ChangedResponse>(`/api/discipline/changed?${qs({ hours })}`),

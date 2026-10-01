@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _V1 = """
 CREATE TABLE candles (
@@ -245,6 +245,23 @@ CREATE INDEX levels_symbol ON levels (market, symbol);
 ALTER TABLE accounts ADD COLUMN max_trades_per_day INTEGER CHECK (max_trades_per_day IS NULL OR max_trades_per_day > 0);
 """
 
+# Оповещения о цене: «сообщи, когда цена дойдёт до X». Срабатывание фиксируется один раз и не стирается.
+_V15 = """
+CREATE TABLE alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT NOT NULL UNIQUE,
+  market TEXT NOT NULL, symbol TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('above','below')),
+  price REAL NOT NULL CHECK (price > 0),
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','triggered','cancelled')),
+  triggered_at INTEGER, triggered_price REAL,
+  seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX alerts_status ON alerts (status, market, symbol);
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -342,4 +359,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 14:
         conn.executescript(_V14)
         conn.execute("PRAGMA user_version = 14")
+        conn.commit()
+    if version < 15:
+        conn.executescript(_V15)
+        conn.execute("PRAGMA user_version = 15")
         conn.commit()

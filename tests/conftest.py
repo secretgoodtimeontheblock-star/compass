@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from compass.accounts import AccountStore
+from compass.alerts import AlertEngine, AlertStore
 from compass.ai.providers import ModelInfo
 from compass.ai.service import AiService
 from compass.api.app import Services
@@ -66,12 +67,16 @@ class ScriptedAdapter:
 class RecordingNotifier:
     sent: list[Signal] = field(default_factory=list)
     digests: list[list[Signal]] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
 
     def send(self, signal: Signal) -> None:
         self.sent.append(signal)
 
     def send_digest(self, signals: list[Signal]) -> None:
         self.digests.append(list(signals))
+
+    def send_text(self, text: str) -> None:
+        self.texts.append(text)
 
 
 class FakeProvider:
@@ -123,6 +128,7 @@ def env() -> Env:
     engine = SignalEngine(cache, watchlist, settings, store, notifier, now_ms=lambda: now[0])
     cloud, local = FakeProvider("cursor", cloud=True), FakeProvider("ollama", cloud=False)
     ai = AiService({"cursor": cloud, "ollama": local}, settings, conn, slot_wait_s=0.05)
+    alerts = AlertStore(conn)
     svc = Services(
         adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, now_ms=lambda: now[0],
         plans=PlanStore(conn),
@@ -130,6 +136,8 @@ def env() -> Env:
         accounts=AccountStore(conn),
         replay=ReplayStore(conn),
         levels=LevelStore(conn),
+        alerts=alerts,
+        alert_engine=AlertEngine(cache, alerts, notifier, now_ms=lambda: now[0]),
     )
     return Env(svc, adapter, notifier, now, cloud, local)
 

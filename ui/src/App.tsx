@@ -114,6 +114,19 @@ export default function App() {
   const [journalMode, setJournalMode] = useState<JournalMode>("real");
   const positionsApi = useApi(() => api.positions(journalMode), [journalMode]);
   const aiStatusApi = useApi(() => api.aiStatus(), []);
+  // сработавшие оповещения о цене: показываем один раз и отмечаем прочитанными
+  const firedApi = useApi(() => api.alerts({ status: "triggered", unseen: true }), [], 30_000);
+  useEffect(() => {
+    const fired = firedApi.data;
+    if (!fired || fired.length === 0) return;
+    for (const a of fired) {
+      toast(`🔔 ${a.symbol}: цена ${a.kind === "above" ? "поднялась до" : "опустилась до"} ${a.price}`, {
+        description: a.note || "Ваше собственное оповещение, не сигнал.",
+        duration: 12000,
+      });
+    }
+    void api.alertsSeen().catch(() => undefined);
+  }, [firedApi.data]);
 
   // AI: согласие на отправку данных запрашивается в момент первого обращения, а не «на всякий случай»
   const [consent, setConsent] = useState<{ status: AiStatus; resolve: (ok: boolean) => void }>();

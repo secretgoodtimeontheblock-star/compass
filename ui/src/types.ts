@@ -811,3 +811,17 @@ export interface PresetGroup {
   note: string;
   instruments: PresetInstrument[];
 }
+
+export interface AlertDto {
+  id: number;
+  market: MarketId;
+  symbol: string;
+  kind: "above" | "below";
+  price: number;
+  note: string;
+  created_at: number;
+  status: "active" | "triggered" | "cancelled";
+  triggered_at: number | null;
+  triggered_price: number | null;
+  seen: boolean;
+}

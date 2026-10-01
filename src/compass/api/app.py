@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -20,6 +21,7 @@ from compass import __version__, oos, portfolio
 from compass import review_week as review_week_mod
 from compass import screener as screener_mod
 from compass.accounts import MARKET_TZ, Account, AccountStore
+from compass.alerts import Alert, AlertEngine, AlertStore, AlertWatcher
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
@@ -104,6 +106,9 @@ class Services:
     accounts: AccountStore | None = None
     replay: ReplayStore | None = None
     levels: LevelStore | None = None
+    alerts: AlertStore | None = None
+    alert_engine: AlertEngine | None = None
+    alert_watcher: AlertWatcher | None = None  # None — фоновой проверки нет (тесты)
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
@@ -154,6 +159,14 @@ class WatchItem(BaseModel):
     name: str = ""
 
 
+class AlertRequest(BaseModel):
+    market: str
+    symbol: str
+    price: float = Field(gt=0)
+    kind: Literal["above", "below"] | None = None  # по умолчанию — по положению цены относительно текущей
+    note: str = Field("", max_length=80)
+
+
 class ReconcileRequest(BaseModel):
     market: str
     positions: list[dict] = Field(max_length=500)  # [{symbol, qty, avg_price?}] из выписки брокера
@@ -177,11 +190,15 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if svc.scanner:
             svc.scanner.start()
+        if svc.alert_watcher:
+            svc.alert_watcher.start()
         try:
             yield
         finally:
             if svc.scanner:
                 svc.scanner.stop()
+            if svc.alert_watcher:
+                svc.alert_watcher.stop()
 
     app = FastAPI(title="Compass", version=__version__, lifespan=lifespan)
     install_guard(app, session_token)
@@ -1014,6 +1031,56 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "«Правило в рынке» — что показывает стратегия на последней закрытой свече, а не совет входить.",
             ],
         }
+
+    # --- оповещения о цене ---
+
+    def alert_store() -> AlertStore:
+        if svc.alerts is None:
+            raise HTTPException(503, "Хранилище оповещений недоступно")
+        return svc.alerts
+
+    def alert_dto(a: Alert) -> dict:
+        return asdict(a)
+
+    @app.post("/api/alerts", status_code=201)
+    def alerts_add(req: AlertRequest) -> dict:
+        """«Сообщи, когда цена дойдёт до X». Направление выводится из текущей цены, если не задано."""
+        adapter(req.market)
+        try:
+            last = svc.cache.get(req.market, req.symbol, "1h", 2).candles[-1].close
+        except (MarketError, IndexError):
+            raise ValueError("Не удалось получить текущую цену: оповещение без неё поставить нельзя") from None
+        kind = req.kind or ("above" if req.price > last else "below")
+        if kind == "above" and req.price <= last:
+            raise ValueError(f"Цена уже выше {req.price:g} (сейчас {last:g}): оповещение «выше» сработало бы сразу")
+        if kind == "below" and req.price >= last:
+            raise ValueError(f"Цена уже ниже {req.price:g} (сейчас {last:g}): оповещение «ниже» сработало бы сразу")
+        a = alert_store().add(Alert(req.market, req.symbol, kind, req.price, req.note))
+        return {**alert_dto(a), "last_price": last}
+
+    @app.get("/api/alerts")
+    def alerts_list(status: str | None = None, market: str | None = None, symbol: str | None = None,
+                    unseen: bool = False) -> list[dict]:
+        if status is not None and status not in ("active", "triggered", "cancelled"):
+            raise ValueError("Статус: active, triggered или cancelled")
+        rows = alert_store().list(status, market, symbol)
+        return [alert_dto(a) for a in rows if not unseen or not a.seen]
+
+    @app.post("/api/alerts/seen")
+    def alerts_seen() -> dict:
+        return {"marked": alert_store().mark_seen()}
+
+    @app.post("/api/alerts/check")
+    def alerts_check() -> dict:
+        """Проверить прямо сейчас (фон делает это раз в минуту)."""
+        if svc.alert_engine is None:
+            raise HTTPException(503, "Проверка оповещений недоступна")
+        return {"triggered": [alert_dto(a) for a in svc.alert_engine.check()]}
+
+    @app.delete("/api/alerts/{alert_id}", status_code=204)
+    def alerts_cancel(alert_id: int) -> None:
+        if not alert_store().cancel(alert_id):
+            raise HTTPException(404, "Активного оповещения с таким номером нет")
 
     # --- сохранённые уровни ---
 
