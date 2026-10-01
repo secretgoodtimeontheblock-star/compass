@@ -144,3 +144,14 @@ def test_v13_upgrade_adds_levels_and_trades_limit_keeping_accounts(tmp_path) -> 
     finally:
         conn.close()
     assert sqlite3.connect(str(path) + ".v13.bak").execute("PRAGMA user_version").fetchone()[0] == 13
+
+
+def test_experience_level_defaults_to_beginner_and_validates(env) -> None:
+    s = env.services.settings
+    assert s.get("experience_level") == "beginner"
+    assert s.update({"experience_level": "researcher"})["experience_level"] == "researcher"
+    import pytest
+
+    for bad in ("pro", 1, None, ""):
+        with pytest.raises(ValueError):
+            s.update({"experience_level": bad})

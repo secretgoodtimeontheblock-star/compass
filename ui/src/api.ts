@@ -8,6 +8,11 @@ import type {
   BacktestResponse,
   Candle,
   CandlesResponse,
+  ChangedResponse,
+  CockpitResponse,
+  GlossaryTerm,
+  LabResponse,
+  ViolationsResponse,
   DayResponse,
   Instrument,
   JournalEntry,
@@ -92,6 +97,20 @@ export const api = {
 
   strategies: () => request<Strategy[]>("/api/strategies"),
   backtest: (body: BacktestRequestBody) => request<BacktestResponse>("/api/backtest", json("POST", body)),
+  lab: (body: BacktestRequestBody & { grid: Record<string, number[]>; folds: number; mode: "rolling" | "anchored" }) =>
+    request<LabResponse>("/api/lab", json("POST", body)),
+  cockpit: () => request<CockpitResponse>("/api/cockpit"),
+  glossary: () => request<GlossaryTerm[]>("/api/glossary"),
+  changed: (hours = 24) => request<ChangedResponse>(`/api/discipline/changed?${qs({ hours })}`),
+  violations: (days = 7) => request<ViolationsResponse>(`/api/discipline/violations?${qs({ days })}`),
+  aiWhatChanged: (hours = 24, refresh = false) =>
+    request<AiResult>("/api/ai/what-changed", json("POST", { hours, refresh })),
+  aiDiscipline: (days = 7, refresh = false) =>
+    request<AiResult>("/api/ai/discipline", json("POST", { days, refresh })),
+  aiExplainBacktest: (body: BacktestRequestBody) =>
+    request<AiResult>("/api/ai/explain-backtest", json("POST", body)),
+  aiExplainConcept: (concept_id: string, context?: string) =>
+    request<AiResult>("/api/ai/explain-concept", json("POST", { concept_id, context })),
   validate: (body: BacktestRequestBody & { train_pct: number; grid: Record<string, number[]> }) =>
     request<OosResponse>("/api/validate", json("POST", body)),
 

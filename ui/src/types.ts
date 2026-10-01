@@ -213,8 +213,45 @@ export interface BacktestResponse {
     cost_stress: { multiplier: number; fee_pct: number; slippage_pct: number; return_pct: number; trades: number }[];
   } | null;
   coverage: { requested: number; candles: number; first_ts: number; last_ts: number; exhausted: boolean };
+  execution: ExecutionBlock;
+  integrity: IntegrityReport;
+  weaknesses: Weakness[];
+  trials: { prior_variants: number; this_run_variants: number; total_variants: number; warning: string | null };
   trades: Trade[];
   equity: { t: number; v: number }[];
+}
+
+export interface ExecutionBlock {
+  model: {
+    fee_pct: number;
+    slippage_pct: number;
+    spread_pct: number;
+    max_participation_pct: number | null;
+    round_trip_cost_pct: number;
+  };
+  cost_stress: { multiplier: number; fee_pct: number; slippage_pct: number; spread_pct: number; return_pct: number; trades: number }[];
+  story: string;
+  max_participation_pct: number | null;
+}
+
+export interface IntegrityReport {
+  passed: boolean;
+  summary: string;
+  checks: { id: string; title: string; status: "pass" | "fail" | "info" | "skipped"; detail: string }[];
+}
+
+export interface Weakness {
+  code: string;
+  severity: "bad" | "warn" | "info";
+  text: string;
+  learn: string[];
+}
+
+export interface GlossaryTerm {
+  id: string;
+  term: string;
+  short: string;
+  why: string;
 }
 
 export interface RiskResponse {
@@ -252,7 +289,10 @@ export interface Settings {
   signal_valid_bars: number;
   quiet_hours: { enabled: boolean; from: string; to: string };
   paused_instruments: string[];
+  experience_level: ExperienceLevel;
 }
+
+export type ExperienceLevel = "beginner" | "trader" | "researcher";
 
 export interface JournalDraft {
   market: MarketId;
@@ -400,6 +440,8 @@ export interface BacktestRequestBody {
   capital: number;
   fee_pct: number;
   slippage_pct: number;
+  spread_pct?: number;
+  max_volume_pct?: number;
   stop_atr_mult?: number;
   target_r?: number;
   risk_pct?: number;
@@ -470,6 +512,26 @@ export interface AccountPosition {
   cost: number;
   stop: number | null;
   risk_at_stop: number | null;
+  risk: number | null;
+  risk_basis: "mark" | "cost";
+  mark_price: number | null;
+  mark_status: "fresh" | "stale" | "missing";
+  mark_age_s: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pct: number | null;
+  stop_breached: boolean;
+  weight_pct: number | null;
+}
+
+export interface PortfolioTruth {
+  status: "ok" | "partial" | "unmarked";
+  sources: {
+    journal: { entries: number; last_entry_ts: number | null };
+    market: { marked: number; stale: number; missing: number };
+    broker: { connected: boolean };
+  };
+  reconciliation: { status: "not_connected" | "match" | "mismatch"; differences: { symbol: string; kind: string; message: string }[] };
 }
 
 export interface AccountSnapshot {
@@ -478,8 +540,12 @@ export interface AccountSnapshot {
   currency: string;
   capital: number | null;
   equity: number | null;
+  equity_complete: boolean;
   free: number | null;
   realized_total: number;
+  unrealized_total: number;
+  exposure_cost: number;
+  truth: PortfolioTruth;
   daily_pnl: number;
   daily_limit: number | null;
   daily_limit_breached: boolean;
@@ -600,4 +666,136 @@ export interface WeekAccount {
   days_over_trades_limit: string[];
   max_trades_per_day: number | null;
   notes: string[];
+}
+
+
+export interface CockpitQuestion {
+  id: "now" | "positions" | "risk" | "plans" | "signals" | "rules" | "data";
+  question: string;
+  answer: string;
+  status: "ok" | "attention" | "bad";
+  items: Record<string, unknown>[];
+}
+
+export interface CockpitAttention {
+  severity: "stop" | "bad" | "attention" | "info";
+  section: string;
+  text: string;
+  hint: string;
+  code: string;
+  learn: string[];
+}
+
+export interface CockpitResponse {
+  generated_at: number;
+  status: "ok" | "attention" | "stop";
+  headline: string;
+  questions: CockpitQuestion[];
+  attention: CockpitAttention[];
+  notes: string[];
+}
+
+export interface LabFinding {
+  code: string;
+  severity: "good" | "warn" | "bad";
+  title: string;
+  text: string;
+  learn: string[];
+}
+
+export interface LabFold {
+  index: number;
+  train_from: number | null;
+  train_to: number | null;
+  test_from: number;
+  test_to: number;
+  params: Record<string, number> | null;
+  train_score: number | null;
+  train_return_pct: number | null;
+  test_return_pct: number;
+  test_trades: number;
+  test_max_drawdown_pct: number;
+  buy_hold_pct: number | null;
+  status: "ok" | "no_choice";
+}
+
+export interface LabCell {
+  valid: boolean;
+  return_pct?: number;
+  max_drawdown_pct?: number;
+  trades?: number;
+  score?: number | null;
+  thin?: boolean;
+}
+
+export interface LabResponse {
+  verdict: {
+    status: "robust" | "mixed" | "fragile" | "insufficient";
+    headline: string;
+    findings: LabFinding[];
+    disclaimer: string;
+  };
+  walk_forward: {
+    summary: {
+      mode: string;
+      optimized: boolean;
+      folds: number;
+      usable_folds: number;
+      profitable_folds: number;
+      stitched_return_pct: number | null;
+      mean_return_pct: number | null;
+      worst_fold_pct: number | null;
+      trades: number;
+      param_consistency: number | null;
+      efficiency: number | null;
+    };
+    folds: LabFold[];
+  };
+  parameter_map: {
+    available: boolean;
+    reason?: string;
+    params?: string[];
+    axes?: number[][];
+    matrix?: LabCell[][];
+    variants?: number;
+    positive_share_pct?: number | null;
+    stability?: { verdict: string; text: string };
+  };
+  robustness: {
+    bootstrap: { trades: number; mean_trade_pct: number; mean_p5_pct: number; mean_p95_pct: number; prob_no_edge_pct: number } | null;
+    concentration: { top3_profit_share_pct: number | null; return_without_best_pct: number; total_return_pct: number } | null;
+    drawdown: {
+      max_drawdown_pct: number;
+      peak_to_trough_days: number;
+      recovered: boolean;
+      recovery_days: number | null;
+      longest_underwater_days: number;
+      current_drawdown_pct: number;
+    } | null;
+    tail: { var95_bar_pct: number; cvar95_bar_pct: number | null; worst_bar_pct: number } | null;
+    regimes: { regimes: { id: string; label: string; bars: number; return_pct: number | null; buy_hold_pct: number | null; thin: boolean }[]; dominant: string | null } | null;
+    cost_stress: { multiplier: number; fee_pct: number; slippage_pct: number; spread_pct: number; return_pct: number; trades: number }[];
+  };
+  multiple_testing: {
+    variants_this_run: number;
+    prior_variants: number;
+    pbo: { available: boolean; value: number | null; reason?: string };
+    dsr: { available: boolean; value: number | null; trials?: number };
+  };
+  research: Record<string, number | null> | null;
+  notes: string[];
+  warnings: string[];
+  trials: { prior_variants: number; this_run_variants: number; total_variants: number; warning: string | null };
+}
+
+export interface ChangedResponse {
+  hours: number;
+  empty: boolean;
+  text: string;
+}
+
+export interface ViolationsResponse {
+  violations: string[];
+  status: string;
+  text: string;
 }

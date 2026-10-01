@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AiModel, AiProviderId, Market, Settings } from "../types";
+import { LEVEL_HINT, LEVEL_LABEL } from "../lib/experience";
+import type { AiModel, AiProviderId, ExperienceLevel, Market, Settings } from "../types";
 import { AccountsSection } from "./AccountsSection";
 import { Modal } from "./Modal";
 
@@ -19,6 +20,7 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
     tf_crypto: settings.tf_crypto,
     signal_valid_bars: String(settings.signal_valid_bars ?? 3),
   });
+  const [level, setLevel] = useState<ExperienceLevel>(settings.experience_level ?? "beginner");
   const [quiet, setQuiet] = useState(settings.quiet_hours ?? { enabled: false, from: "22:00", to: "08:00" });
   const [aiProvider, setAiProvider] = useState<AiProviderId>(settings.ai_provider);
   const [aiModels, setAiModels] = useState<Partial<Record<AiProviderId, string>>>(settings.ai_models ?? {});
@@ -61,6 +63,7 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
           quiet_hours: quiet,
           ai_provider: aiProvider,
           ai_models: aiModels,
+          experience_level: level,
         }),
       );
       onClose();
@@ -73,6 +76,17 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
 
   return (
     <Modal title="Настройки" onClose={onClose}>
+        <label className="field" style={{ marginBottom: 6 }}>
+          <span>Сколько показывать: уровень интерфейса</span>
+          <select value={level} onChange={(e) => setLevel(e.target.value as ExperienceLevel)}>
+            {(Object.keys(LEVEL_LABEL) as ExperienceLevel[]).map((k) => (
+              <option key={k} value={k}>{LEVEL_LABEL[k]}</option>
+            ))}
+          </select>
+        </label>
+        <p className="muted small-text" style={{ marginTop: 0 }}>
+          {LEVEL_HINT[level]} Расчёты и проверки у всех уровней одни и те же — меняется только то, что выведено на экран.
+        </p>
         <div className="form-grid" style={{ padding: 0 }}>
           <label className="field">
             <span>Стартовый капитал бэктеста</span>

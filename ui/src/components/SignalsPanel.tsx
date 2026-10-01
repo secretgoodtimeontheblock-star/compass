@@ -4,6 +4,7 @@ import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, STRATEGY_SHORT } from "../lib/format";
 import type { Instrument, JournalDraft, PlanDto, RiskResponse, Signal } from "../types";
 import { AiAnswer } from "./AiAnswer";
+import { CockpitPanel } from "./CockpitPanel";
 import { DayPanel } from "./DayPanel";
 
 interface Props {
@@ -45,6 +46,7 @@ export function SignalsPanel({ signals, selected, unseenCount, onSelect, onMarkS
         </button>
       </div>
       <div className="scroll">
+        <CockpitPanel refreshKey={signals.length} />
         <DayPanel refreshKey={signals.length} />
         {list.length === 0 && (
           <div className="empty">

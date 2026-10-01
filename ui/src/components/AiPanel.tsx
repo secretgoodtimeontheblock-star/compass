@@ -1,6 +1,7 @@
 import { useContext, useState } from "react";
 import { api } from "../api";
 import { AiContext, useAiRun } from "../lib/ai-context";
+import { atLeast, useLevel } from "../lib/experience";
 import type { AiStatus, Instrument } from "../types";
 import { AiAnswer } from "./AiAnswer";
 
@@ -25,6 +26,9 @@ export function AiPanel({ instrument, tf, status }: Props) {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState("");
   const [withContext, setWithContext] = useState(true);
+  const level = useLevel();
+  const [facts, setFacts] = useState<{ title: string; text: string }>();
+  const [factsError, setFactsError] = useState<string>();
 
   const ask = (q: string, refresh = false) => {
     const text = q.trim();
@@ -42,6 +46,17 @@ export function AiPanel({ instrument, tf, status }: Props) {
   };
 
   const off = !status || status.provider === "off";
+
+  // слой дисциплины: факты считает код (доступны и без AI), AI лишь пересказывает их
+  const showFacts = async (title: string, load: () => Promise<{ text: string }>) => {
+    setFactsError(undefined);
+    try {
+      setFacts({ title, text: (await load()).text });
+    } catch (e) {
+      setFacts(undefined);
+      setFactsError(e instanceof Error ? e.message : "Не удалось получить факты");
+    }
+  };
 
   return (
     <div className="scroll">
@@ -64,6 +79,33 @@ export function AiPanel({ instrument, tf, status }: Props) {
           {!status.available && <span className="down"> · недоступен: {status.reason}</span>}
           {status.available && status.reason && <span> · {status.reason}</span>}
         </div>
+      )}
+
+      {atLeast(level, "trader") && (
+        <>
+          <div className="panel-head" style={{ paddingBottom: 2 }}>Дисциплина</div>
+          <div className="chips">
+            <button className="btn small chip" disabled={ai.busy || off} onClick={() => (setAsked("Что изменилось за сутки?"), void ai.run((r) => api.aiWhatChanged(24, r)))}>
+              Что изменилось за сутки?
+            </button>
+            <button className="btn small chip" disabled={ai.busy || off} onClick={() => (setAsked("Где я отступил от своих правил?"), void ai.run((r) => api.aiDiscipline(7, r)))}>
+              Где я отступил от своих правил?
+            </button>
+            <button className="btn small chip" onClick={() => void showFacts("Что изменилось за сутки (факты)", () => api.changed(24))}>
+              Факты без AI: что изменилось
+            </button>
+            <button className="btn small chip" onClick={() => void showFacts("Отступления от правил (факты)", () => api.violations(7))}>
+              Факты без AI: правила
+            </button>
+          </div>
+          {factsError && <div className="error">{factsError}</div>}
+          {facts && (
+            <div className="card">
+              <b>{facts.title}</b>
+              <pre className="num" style={{ whiteSpace: "pre-wrap", margin: "4px 0 0", font: "inherit" }}>{facts.text}</pre>
+            </div>
+          )}
+        </>
       )}
 
       <div className="chips">

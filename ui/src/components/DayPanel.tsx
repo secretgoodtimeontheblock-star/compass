@@ -1,5 +1,6 @@
 import { api } from "../api";
 import { fmtNum, pnlClass } from "../lib/format";
+import { atLeast, useLevel } from "../lib/experience";
 import { useApi } from "../lib/use-api";
 import type { AccountSnapshot, WatchStatus } from "../types";
 
@@ -26,13 +27,24 @@ export function DayPanel({ refreshKey = 0 }: { refreshKey?: number }) {
         <AccountCard key={a.market} a={a} />
       ))}
       <p className="caveat" style={{ margin: "2px 0 6px" }}>
-        {day.data?.notes.join(" ")} Без рыночных цен: нереализованный результат не учитывается.
+        {day.data?.notes.join(" ")}
       </p>
     </div>
   );
 }
 
+const TRUTH_LABEL: Record<AccountSnapshot["truth"]["status"], string> = {
+  ok: "цены свежие",
+  partial: "цены устарели у части позиций",
+  unmarked: "нет рыночных цен",
+};
+
+const ageText = (sec: number | null) =>
+  sec == null ? "" : sec < 90 ? "только что" : sec < 5400 ? `${Math.round(sec / 60)} мин назад` : `${Math.round(sec / 3600)} ч назад`;
+
 function AccountCard({ a }: { a: AccountSnapshot }) {
+  const level = useLevel();
+  const trader = atLeast(level, "trader");
   const money = (v: number | null) => (v == null ? "—" : `${fmtNum(v)} ${a.currency}`);
   return (
     <div className="card">
@@ -41,6 +53,17 @@ function AccountCard({ a }: { a: AccountSnapshot }) {
         <span className="muted">{a.currency}</span>
       </div>
       <dl className="kv num">
+        {trader && (
+          <>
+            <dt>Капитал</dt>
+            <dd>
+              {money(a.equity)}
+              {!a.equity_complete && <span className="muted"> (оценка неполная)</span>}
+            </dd>
+          </>
+        )}
+        <dt>Нереализованный результат</dt>
+        <dd className={pnlClass(a.unrealized_total)}>{money(a.unrealized_total)}</dd>
         <dt>Свободно</dt>
         <dd>{money(a.free)}</dd>
         <dt>В позициях</dt>
@@ -63,12 +86,24 @@ function AccountCard({ a }: { a: AccountSnapshot }) {
               <tr key={p.symbol}>
                 <td>{p.symbol}</td>
                 <td className="r">{fmtNum(p.qty, 6)}</td>
+                <td className={`r ${pnlClass(p.unrealized_pnl)}`}>
+                  {p.unrealized_pnl == null ? "нет цены" : fmtNum(p.unrealized_pnl)}
+                  {p.mark_status === "stale" && <span className="muted" title="Цена устарела"> ⏱</span>}
+                </td>
                 <td className="r muted">стоп {p.stop == null ? "не записан" : fmtNum(p.stop)}</td>
-                <td className="r">{p.risk_at_stop == null ? "риск не ограничен" : `риск ${fmtNum(p.risk_at_stop)}`}</td>
+                <td className="r">{p.risk == null ? "риск не ограничен" : `риск ${fmtNum(p.risk)}`}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+      {trader && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Данные: {TRUTH_LABEL[a.truth.status]}
+          {a.positions[0]?.mark_age_s != null ? ` · ответ источника ${ageText(a.positions[0].mark_age_s)}` : ""}
+          {" · "}журнал: {a.truth.sources.journal.entries} зап.
+          {" · "}сверка с брокером: {a.truth.reconciliation.status === "not_connected" ? "не подключена" : a.truth.reconciliation.status === "match" ? "совпадает" : "расхождения"}
+        </div>
       )}
       {a.warnings.map((w) => (
         <div className="notice" key={w} style={{ marginTop: 6 }}>

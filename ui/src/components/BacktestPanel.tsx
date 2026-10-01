@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtDate, fmtNum, fmtPct, fmtPrice, pnlClass } from "../lib/format";
-import type { BacktestRequestBody, BacktestResponse, Instrument, Settings, Strategy, Trade } from "../types";
+import type { BacktestRequestBody, BacktestResponse, Instrument, Settings, Strategy, Trade, Weakness } from "../types";
+import { atLeast, useLevel } from "../lib/experience";
 import { EquityChart } from "./EquityChart";
+import { LabPanel } from "./LabPanel";
+import { Learn } from "./Learn";
 import { OosPanel } from "./OosPanel";
 
 interface Props {
@@ -25,6 +28,11 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   const [riskPct, setRiskPct] = useState("1");
   const [fee, setFee] = useState(0.05);
   const [slip, setSlip] = useState(0.05);
+  const [spread, setSpread] = useState(""); // пусто — спред профиля рынка
+  const [limitVolume, setLimitVolume] = useState(false);
+  const level = useLevel();
+  const trader = atLeast(level, "trader");
+  const researcher = atLeast(level, "researcher");
   const [closeEod, setCloseEod] = useState(false);
   const intraday = INTRADAY.includes(tf);
   const [res, setRes] = useState<BacktestResponse>();
@@ -64,7 +72,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
     setParams(savedProfile.params);
   }, [profileKey, savedProfile]);
 
-  const contextKey = JSON.stringify([instrument?.market, instrument?.symbol, tf, sid, params, capital, depth, fee, slip, closeEod, useStop, stopMult, targetR, riskPct]);
+  const contextKey = JSON.stringify([instrument?.market, instrument?.symbol, tf, sid, params, capital, depth, fee, slip, spread, limitVolume, closeEod, useStop, stopMult, targetR, riskPct]);
   const generation = useRef(0);
   useEffect(() => {
     generation.current++;
@@ -88,6 +96,8 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
     capital,
     fee_pct: fee,
     slippage_pct: slip,
+    ...(spread !== "" && Number.isFinite(Number(spread)) ? { spread_pct: Number(spread) } : {}),
+    ...(limitVolume ? { max_volume_pct: 10 } : {}),
     ...(closeEod && intraday ? { close_eod: true } : {}),
     ...(useStop
       ? {
@@ -166,6 +176,18 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
           <span>Проскальзывание, %</span>
           <input type="number" min={0} step={0.01} value={slip} onChange={(e) => setSlip(Number(e.target.value))} />
         </label>
+        {trader && (
+          <>
+            <label className="field">
+              <span>Спред, % (пусто — как у рынка)</span>
+              <input type="number" min={0} max={50} step={0.01} value={spread} placeholder="по профилю" onChange={(e) => setSpread(e.target.value)} />
+            </label>
+            <label className="field" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+              <input type="checkbox" checked={limitVolume} onChange={(e) => setLimitVolume(e.target.checked)} />
+              <span>Не больше 10% объёма свечи в заявке</span>
+            </label>
+          </>
+        )}
         <p className="muted full" style={{ margin: 0, fontSize: 12 }}>
           {savedProfile
             ? "Поиск сигналов по этому тикеру использует эту стратегию и эти параметры."
@@ -264,7 +286,8 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
       </div>
 
       {error && <div className="error">{error}</div>}
-      <OosPanel key={`${instrument.market}:${instrument.symbol}:${strat.id}`} strategy={strat} request={requestBody()} />
+      {researcher && <OosPanel key={`${instrument.market}:${instrument.symbol}:${strat.id}`} strategy={strat} request={requestBody()} />}
+      <LabPanel key={`lab:${instrument.market}:${instrument.symbol}:${strat.id}`} strategy={strat} request={requestBody()} />
       {res?.stale && <div className="notice">Источник данных недоступен — расчёт по сохранённым данным.</div>}
       {res && res.data_quality.status !== "ok" && (
         <div className={res.data_quality.status === "error" ? "error" : "notice"}>
@@ -281,7 +304,10 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             : "Запрошенная глубина набрана целиком: более ранняя история может существовать, выберите глубже."}
         </div>
       )}
+      {res?.integrity && !res.integrity.passed && <div className="error">{res.integrity.summary}</div>}
+      {res?.execution && <ExecutionNote res={res} showTable={trader} />}
       {res?.intraday && <IntradayBlock ib={res.intraday} />}
+      {res?.weaknesses && res.weaknesses.length > 0 && <Weaknesses items={res.weaknesses} limit={researcher ? 99 : trader ? 6 : 3} />}
       {res?.warnings.map((w) => (
         <div key={w} className="notice">{w}</div>
       ))}
@@ -297,11 +323,15 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             <Metric label="Средняя сделка" value={fmtPct(m.avg_trade_pct)} cls={pnlClass(m.avg_trade_pct)} />
             <Metric label="Профит-фактор" value={m.profit_factor == null ? "—" : fmtNum(m.profit_factor)} />
             <Metric label="Время в рынке" value={fmtPct(m.exposure_pct, 1, false)} />
-            <Metric label="Sharpe" value={m.sharpe == null ? "—" : fmtNum(m.sharpe)} />
-            <Metric label="Sortino" value={m.sortino == null ? "—" : fmtNum(m.sortino)} />
-            <Metric label="Calmar" value={m.calmar == null ? "—" : fmtNum(m.calmar)} />
+            {researcher && (
+              <>
+                <Metric label="Sharpe" value={m.sharpe == null ? "—" : fmtNum(m.sharpe)} />
+                <Metric label="Sortino" value={m.sortino == null ? "—" : fmtNum(m.sortino)} />
+                <Metric label="Calmar" value={m.calmar == null ? "—" : fmtNum(m.calmar)} />
+              </>
+            )}
             <Metric label="Серия убытков подряд" value={String(m.max_consecutive_losses)} />
-            {res!.run_card.rules && (
+            {researcher && res!.run_card.rules && (
               <>
                 <Metric label="Средняя сделка, R" value={m.avg_r == null ? "—" : fmtNum(m.avg_r)} cls={pnlClass(m.avg_r)} />
                 <Metric label="Выходов по стопу / цели" value={`${m.stops} / ${m.targets}`} />
@@ -315,7 +345,7 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
             <b>{fmtPct(Math.abs(beat), 1, false)}</b> за {m.candles} свечей.
           </p>
           <EquityChart points={res!.equity} theme={theme} />
-          <Robustness res={res!} />
+          {researcher && <Robustness res={res!} />}
 
           <div className="panel-head" style={{ paddingBottom: 2 }}>
             Последние сделки
@@ -476,6 +506,60 @@ function IntradayBlock({ ib }: { ib: NonNullable<BacktestResponse["intraday"]> }
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+const SEV_CLASS: Record<Weakness["severity"], string> = { bad: "error", warn: "notice", info: "caveat" };
+
+/** Какие допущения делают результат слабее. Считает код; новичок видит самое серьёзное, остальное — по кнопке. */
+function Weaknesses({ items, limit }: { items: Weakness[]; limit: number }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, limit);
+  return (
+    <div style={{ margin: "6px 12px" }} data-testid="weaknesses">
+      <div className="panel-head" style={{ padding: "0 0 2px" }}>Что делает этот результат слабее</div>
+      {shown.map((w) => (
+        <div key={w.code} className={SEV_CLASS[w.severity]} style={{ marginBottom: 4 }}>
+          {w.text}
+          <Learn ids={w.learn} />
+        </div>
+      ))}
+      {items.length > limit && (
+        <button className="btn small" onClick={() => setAll((v) => !v)}>
+          {all ? "Только главное" : `Показать все (${items.length})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Допущения об исполнении простым языком: во что обходятся сделки и что будет, если исполнение хуже. */
+function ExecutionNote({ res, showTable }: { res: BacktestResponse; showTable: boolean }) {
+  const ex = res.execution;
+  return (
+    <div className="card" style={{ margin: "6px 12px" }} data-testid="execution">
+      <b>Расходы и исполнение</b>
+      <div className="muted">{ex.story}</div>
+      {showTable && (
+        <table className="num">
+          <thead>
+            <tr><th>Расходы</th><th className="r">Доходность</th><th className="r">Сделок</th></tr>
+          </thead>
+          <tbody>
+            {ex.cost_stress.map((x) => (
+              <tr key={x.multiplier}>
+                <td>×{x.multiplier} (комиссия {fmtNum(x.fee_pct, 3)}%, слипаж {fmtNum(x.slippage_pct, 3)}%, спред {fmtNum(x.spread_pct, 3)}%)</td>
+                <td className={`r ${pnlClass(x.return_pct)}`}>{fmtPct(x.return_pct)}</td>
+                <td className="r">{x.trades}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {ex.max_participation_pct != null && (
+        <div className="muted num">Наибольшая доля объёма свечи в заявке: {fmtNum(ex.max_participation_pct, 2)}%</div>
+      )}
     </div>
   );
 }

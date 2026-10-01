@@ -15,6 +15,8 @@ from compass.db import Connection
 from compass.strategies import STRATEGIES
 
 AI_PROVIDERS = ("off", "cursor", "claude", "ollama")
+# уровни показа: три представления одного движка — «Начинаю», «Торгую», «Исследую»
+EXPERIENCE_LEVELS = ("beginner", "trader", "researcher")
 
 DEFAULTS: dict[str, Any] = {
     "capital": 100_000.0,  # капитал для расчёта размера позиции
@@ -35,6 +37,8 @@ DEFAULTS: dict[str, Any] = {
     "quiet_hours": {"enabled": False, "from": "22:00", "to": "08:00"},
     # «рынок|тикер», по которым наблюдение приостановлено
     "paused_instruments": [],
+    # сколько возможностей показывать в интерфейсе; движок и расчёты у всех уровней одни и те же
+    "experience_level": "beginner",
 }
 
 
@@ -80,6 +84,7 @@ class Settings:
             "signal_valid_bars": lambda v: _int(v, "Срок сигнала, свечей", 1, 50),
             "quiet_hours": _quiet_hours,
             "paused_instruments": _paused,
+            "experience_level": lambda v: _choice(v, "Уровень", EXPERIENCE_LEVELS),
         }
         return checks[key](value)
 

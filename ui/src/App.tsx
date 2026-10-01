@@ -21,6 +21,7 @@ import { SignalsPanel } from "./components/SignalsPanel";
 import { Tip, TipProvider } from "./components/Tip";
 import { Watchlist } from "./components/Watchlist";
 import { AiContext } from "./lib/ai-context";
+import { ExperienceContext } from "./lib/experience";
 import { fmtPct, fmtPrice, pnlClass } from "./lib/format";
 import { loadPref, savePref, useApi } from "./lib/use-api";
 import { useLiveCandles } from "./lib/use-live-candles";
@@ -312,6 +313,7 @@ export default function App() {
 
   return (
     <AiContext.Provider value={aiCtx}>
+    <ExperienceContext.Provider value={settings?.experience_level ?? "beginner"}>
     <TipProvider delayDuration={350}>
     <div className="app">
       <a className="skip-link" href="#chart">К графику</a>
@@ -663,6 +665,7 @@ export default function App() {
       />
     </div>
     </TipProvider>
+    </ExperienceContext.Provider>
     </AiContext.Provider>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useScopedState } from "../lib/use-scoped-state";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
+import { atLeast, useLevel } from "../lib/experience";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
 import type { Instrument, JournalDraft, JournalEntry, JournalMode, Position } from "../types";
 import { AiAnswer } from "./AiAnswer";
@@ -26,6 +27,7 @@ const MODE_LABELS: Record<JournalMode, string> = { real: "Реальные", pap
 export function JournalPanel({ instrument, entries, positions, mode, onModeChange, lastPrice, onChanged, onSelect, draft, onDraftConsumed }: Props) {
   const scope = `${instrument?.market}:${instrument?.symbol}:${mode}`;
   const ai = useAiRun();
+  const level = useLevel();
   const review = (refresh = false) => void ai.run((r) => api.reviewJournal({}, r), refresh);
   const [side, setSide] = useScopedState<"buy" | "sell">(scope, "buy");
   const [qty, setQty] = useScopedState(scope, "");
@@ -259,7 +261,7 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
         </div>
       )}
 
-      {mode === "real" && <WeekReview refreshKey={entries.length + positions.length} />}
+      {mode === "real" && atLeast(level, "trader") && <WeekReview refreshKey={entries.length + positions.length} />}
 
       {positions.length > 0 && mode === "real" && (
         <div style={{ padding: "8px 12px 0" }}>
@@ -340,7 +342,7 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
               {busy ? "Сохраняем…" : "Записать"}
             </button>
           </div>
-          <PlansSection instrument={instrument} refreshKey={entries.length} />
+          {atLeast(level, "trader") && <PlansSection instrument={instrument} refreshKey={entries.length} />}
 
           <div className="panel-head" style={{ paddingBottom: 2 }}>
             История по {instrument.symbol}
