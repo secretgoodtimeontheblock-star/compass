@@ -300,3 +300,131 @@ def test_position_stop_is_the_latest_recorded_one() -> None:
     assert p["stop"] == 95 and p["risk_at_stop"] == 100  # 20 шт. · (100 − 95): стоп подтянули
     later_without = entries + [e("buy", 5, 100, NOW - HOUR)]  # докупка без стопа не отменяет записанный
     assert portfolio.snapshot(acc(), later_without, NOW)["positions"][0]["stop"] == 95
+
+
+# --- Portfolio Truth: оценка по рыночным ценам, свежесть, сверка ---
+
+from compass.portfolio import Mark  # noqa: E402
+
+
+def mk(price, fetched_s=None, stale=False, max_age=3600) -> Mark:
+    return Mark(price, NOW - HOUR, NOW // 1000 - 60 if fetched_s is None else fetched_s, stale, "test", max_age)
+
+
+def test_marks_turn_unrealized_into_equity_exposure_and_free_stays_cash() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY, stop=90)]  # стоимость 10 000
+    s = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(120)})
+    p = s["positions"][0]
+    assert p["mark_price"] == 120 and p["market_value"] == 12_000 and p["unrealized_pnl"] == 2_000
+    assert p["unrealized_pct"] == 20 and p["mark_status"] == "fresh"
+    assert s["unrealized_total"] == 2_000 and s["equity"] == 102_000  # капитал + нереализованное
+    assert s["exposure"] == 12_000 and s["exposure_cost"] == 10_000  # экспозиция по рынку, не по входу
+    assert s["free"] == 90_000  # свободные деньги от цен не зависят
+    assert s["truth"]["status"] == "ok" and s["equity_complete"] is True
+
+
+def test_open_risk_is_measured_from_current_price_not_entry() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY, stop=90)]
+    up = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(120)})["positions"][0]
+    assert up["risk_at_stop"] == 1_000 and up["risk"] == 3_000 and up["risk_basis"] == "mark"  # от 120 до стопа 90
+    s = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(120)})
+    assert s["open_risk"] == 3_000 and s["heat_pct"] == 3.0
+    no_mark = portfolio.snapshot(acc(), entries, NOW)
+    assert no_mark["open_risk"] == 1_000 and no_mark["positions"][0]["risk_basis"] == "cost"
+
+
+def test_missing_mark_values_position_at_cost_and_says_so() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY, stop=90)]
+    s = portfolio.snapshot(acc(), entries, NOW)
+    p = s["positions"][0]
+    assert p["mark_status"] == "missing" and p["unrealized_pnl"] is None
+    assert s["exposure"] == 10_000 and s["equity"] == 100_000 and s["truth"]["status"] == "unmarked"
+    assert s["equity_complete"] is False
+    assert any("Нет рыночной цены" in w for w in s["warnings"])
+
+
+def test_stale_mark_is_flagged_not_hidden() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY)]
+    cached = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(95, stale=True)})
+    assert cached["positions"][0]["mark_status"] == "stale" and cached["truth"]["status"] == "partial"
+    assert cached["positions"][0]["unrealized_pnl"] == -500  # цена используется, но помечена
+    old = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(95, fetched_s=NOW // 1000 - 7200)})
+    assert old["positions"][0]["mark_status"] == "stale" and old["positions"][0]["mark_age_s"] == 7200
+    assert any("устарели" in w for w in old["warnings"])
+    assert old["equity_complete"] is False
+
+
+def test_price_at_or_below_recorded_stop_is_a_warning_with_zero_remaining_risk() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY, stop=90)]
+    s = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(85)})
+    p = s["positions"][0]
+    assert p["stop_breached"] is True and p["risk"] == 0 and p["unrealized_pnl"] == -1_500
+    assert any("не выше записанного стопа" in w for w in s["warnings"])
+
+
+def test_concentration_warning_only_with_several_positions() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY), e("buy", 10, 100, NOW - DAY, symbol="GAZP")]
+    s = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(100), "GAZP": mk(100)})
+    assert next(x for x in s["positions"] if x["symbol"] == "SBER")["weight_pct"] == pytest.approx(90.9, abs=0.1)
+    assert any("Концентрация" in w for w in s["warnings"])
+    one = portfolio.snapshot(acc(), entries[:1], NOW, {"SBER": mk(100)})
+    assert not any("Концентрация" in w for w in one["warnings"])
+
+
+def test_daily_pnl_stays_realized_only_even_with_marks() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY), e("sell", 50, 110, NOW - HOUR)]
+    s = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(200)})
+    assert s["daily_pnl"] == 500 and s["unrealized_total"] == 5_000
+
+
+def test_reconcile_reports_every_difference_and_merges_nothing() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY), e("buy", 10, 50, NOW - DAY, symbol="GAZP")]
+    pos = portfolio.snapshot(acc(), entries, NOW)["positions"]
+    ok = portfolio.reconcile(pos, [{"symbol": "SBER", "qty": 100, "avg_price": 100.1}, {"symbol": "GAZP", "qty": 10}])
+    assert ok["status"] == "match" and ok["differences"] == []
+    bad = portfolio.reconcile(
+        pos, [{"symbol": "SBER", "qty": 90}, {"symbol": "LKOH", "qty": 3}, {"symbol": "GAZP", "qty": 10, "avg_price": 70}]
+    )
+    kinds = {d["symbol"]: d["kind"] for d in bad["differences"]}
+    assert kinds == {"SBER": "qty_mismatch", "LKOH": "missing_in_journal", "GAZP": "price_mismatch"}
+    gone = portfolio.reconcile(pos, [{"symbol": "SBER", "qty": 100}])
+    assert {d["kind"] for d in gone["differences"]} == {"missing_at_broker"}
+    assert {p["symbol"]: p["qty"] for p in pos} == {"SBER": 100, "GAZP": 10}  # журнал не изменён
+
+
+def test_snapshot_exposes_provenance_of_each_source() -> None:
+    entries = [e("buy", 100, 100, NOW - DAY)]
+    t = portfolio.snapshot(acc(), entries, NOW, {"SBER": mk(100)})["truth"]
+    assert t["sources"]["journal"]["entries"] == 1 and t["sources"]["market"]["marked"] == 1
+    assert t["sources"]["broker"] == {"connected": False} and t["reconciliation"]["status"] == "not_connected"
+    with_broker = portfolio.snapshot(acc(), entries, NOW, None, [{"symbol": "SBER", "qty": 99}])["truth"]
+    assert with_broker["reconciliation"]["status"] == "mismatch"
+
+
+def test_day_api_marks_positions_from_cached_candles_and_reconcile_endpoint(env: Env) -> None:
+    env.adapter.data["SBER"] = day_candles([100, 101, 105])
+    env.services.settings.update({"tf_moex": "1d"})
+    env.services.accounts.update("moex", {"capital": 100_000})
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    client.post("/api/journal", json={"market": "moex", "symbol": "SBER", "side": "buy", "qty": 10, "price": 100,
+                                      "ts": env.now[0] - DAY, "planned_stop": 95})
+    acc_ = next(a for a in client.get("/api/day").json()["accounts"] if a["market"] == "moex")
+    p = acc_["positions"][0]
+    assert p["mark_price"] == 105 and p["unrealized_pnl"] == 50 and p["mark_status"] == "fresh"
+    assert acc_["equity"] == 100_050 and acc_["truth"]["sources"]["market"]["marked"] == 1
+    r = client.post("/api/reconcile", json={"market": "moex", "positions": [{"symbol": "SBER", "qty": 9}]}).json()
+    assert r["status"] == "mismatch" and r["differences"][0]["kind"] == "qty_mismatch"
+    assert client.post("/api/reconcile", json={"market": "moex", "positions": [{"symbol": "SBER"}]}).status_code == 422
+    assert client.post("/api/reconcile", json={"market": "nope", "positions": []}).status_code == 404
+
+
+def test_day_api_survives_unreachable_source_without_cache(env: Env) -> None:
+    from compass.markets import MarketError
+
+    env.adapter.data["SBER"] = MarketError("down")
+    env.services.accounts.update("moex", {"capital": 100_000})
+    client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
+    client.post("/api/journal", json={"market": "moex", "symbol": "SBER", "side": "buy", "qty": 10, "price": 100,
+                                      "ts": env.now[0] - DAY})
+    a = next(x for x in client.get("/api/day").json()["accounts"] if x["market"] == "moex")
+    assert a["positions"][0]["mark_status"] == "missing" and a["truth"]["status"] == "unmarked"

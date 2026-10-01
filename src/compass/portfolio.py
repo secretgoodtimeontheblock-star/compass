@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
 from typing import Any
@@ -26,6 +27,25 @@ from compass.journal import Entry
 _EPS = 1e-9
 CORRELATION_WARN = 0.7
 MIN_OVERLAP = 40  # меньше общих свечей — корреляции верить нельзя
+CONCENTRATION_WARN_PCT = 40.0  # одна позиция дороже такой доли стоимости портфеля — предупреждение
+QTY_TOL = 1e-6  # расхождение количества при сверке, ниже которого позиции считаются совпадающими
+PRICE_TOL_PCT = 0.5  # расхождение средней цены при сверке, %
+
+
+@dataclass(frozen=True, slots=True)
+class Mark:
+    """Рыночная цена инструмента для оценки позиции.
+
+    price_ts — время свечи, из которой взята цена (мс UTC); fetched_at — когда источник последний раз
+    успешно ответил (секунды UTC); stale — источник недоступен и показан кэш; max_age_s — как долго после
+    ответа источника цену ещё можно считать свежей (зависит от таймфрейма)."""
+
+    price: float
+    price_ts: int
+    fetched_at: int | None = None
+    stale: bool = False
+    source: str = ""
+    max_age_s: int = 6 * 3600
 
 
 def realized_events(entries: list[Entry]) -> list[tuple[int, str, float]]:
@@ -82,16 +102,60 @@ def _open_positions(entries: list[Entry]) -> list[dict[str, Any]]:
     return out
 
 
-def snapshot(account: Account, entries: list[Entry], now_ms: int) -> dict[str, Any]:
-    """Состояние счёта. entries — действующие реальные записи этого рынка."""
+def mark_status(mark: Mark | None, now_ms: int) -> tuple[str, int | None]:
+    """«fresh» — цена свежая, «stale» — источник молчит или давно не отвечал, «missing» — цены нет."""
+    if mark is None:
+        return "missing", None
+    age = None if mark.fetched_at is None else max(0, now_ms // 1000 - mark.fetched_at)
+    if mark.stale or age is None or age > mark.max_age_s:
+        return "stale", age
+    return "fresh", age
+
+
+def _value_positions(positions: list[dict[str, Any]], marks: dict[str, Mark], now_ms: int) -> None:
+    """Дописывает к позициям оценку по метке: стоимость, нереализованный результат, риск от текущей цены."""
+    for p in positions:
+        mark = marks.get(p["symbol"])
+        status, age = mark_status(mark, now_ms)
+        p["mark_status"], p["mark_age_s"] = status, age
+        stop = p["stop"]
+        if mark is None:
+            p.update(mark_price=None, mark_ts=None, mark_source=None, market_value=None, unrealized_pnl=None,
+                     unrealized_pct=None, stop_breached=False)
+            p["value"] = p["cost"]  # нет цены — оцениваем по входу и говорим об этом
+            p["risk"], p["risk_basis"] = p["risk_at_stop"], "cost"
+            continue
+        value = p["qty"] * mark.price
+        p.update(
+            mark_price=round(mark.price, 8), mark_ts=mark.price_ts, mark_source=mark.source,
+            market_value=round(value, 2), unrealized_pnl=round(value - p["cost"], 2),
+            unrealized_pct=round((value / p["cost"] - 1) * 100, 2) if p["cost"] else None,
+        )
+        p["value"] = value
+        p["stop_breached"] = stop is not None and mark.price <= stop
+        if stop is None:
+            p["risk"], p["risk_basis"] = None, "mark"
+        else:
+            p["risk"], p["risk_basis"] = round(max(0.0, p["qty"] * (mark.price - stop)), 2), "mark"
+
+
+def snapshot(
+    account: Account,
+    entries: list[Entry],
+    now_ms: int,
+    marks: dict[str, Mark] | None = None,
+    broker: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Состояние счёта. entries — действующие реальные записи этого рынка; marks — тикер → рыночная цена
+    (нет — позиция оценивается по цене входа); broker — позиции из выписки брокера для сверки."""
+    marks = marks or {}
     capital = account.capital
     events = realized_events(entries)
     realized_total = sum(p for _, _, p in events)
     day_from = _day_start_ms(now_ms, account.market)
     daily_pnl = sum(p for ts, _, p in events if ts >= day_from)
     positions = _open_positions(entries)
-    exposure = sum(p["cost"] for p in positions)
-    open_risk = 0.0
+    cost_total = sum(p["cost"] for p in positions)
     unprotected = []
     for p in positions:
         stop = p["stop"]
@@ -100,11 +164,20 @@ def snapshot(account: Account, entries: list[Entry], now_ms: int) -> dict[str, A
             unprotected.append(p["symbol"])
         else:
             p["risk_at_stop"] = round(max(0.0, p["qty"] * (p["avg_price"] - stop)), 2)
-            open_risk += p["risk_at_stop"]
+    _value_positions(positions, marks, now_ms)
+    open_risk = sum(p["risk"] for p in positions if p["risk"] is not None)
+    exposure = sum(p["value"] for p in positions)
+    unrealized_total = sum(p["unrealized_pnl"] for p in positions if p["unrealized_pnl"] is not None)
+    for p in positions:
+        p["weight_pct"] = round(p["value"] / exposure * 100, 1) if exposure > _EPS else None
         p["cost"] = round(p["cost"], 2)
         p["avg_price"] = round(p["avg_price"], 8)
-    equity = None if capital is None else capital + realized_total
-    free = None if equity is None else equity - exposure
+        del p["value"]
+    equity = None if capital is None else capital + realized_total + unrealized_total
+    free = None if capital is None else capital + realized_total - cost_total
+    n_missing = sum(1 for p in positions if p["mark_status"] == "missing")
+    n_stale = sum(1 for p in positions if p["mark_status"] == "stale")
+    marked_all = bool(positions) and n_missing == 0
     warnings: list[str] = []
     pct = (lambda v: None if not capital else round(v / capital * 100, 2))
     daily_limit = None if not capital else capital * account.daily_loss_limit_pct / 100
@@ -130,23 +203,101 @@ def snapshot(account: Account, entries: list[Entry], now_ms: int) -> dict[str, A
         warnings.append(
             f"Нет записанного стопа: {', '.join(unprotected)}. Риск по этим позициям не ограничен и в расчёт риска не входит."
         )
+    breached = [p["symbol"] for p in positions if p["stop_breached"]]
+    if breached:
+        warnings.append(
+            f"Цена не выше записанного стопа: {', '.join(breached)}. Либо стоп уже сработал, а продажа не записана "
+            "в журнал, либо исполнение хуже плана — сверьте журнал с брокером."
+        )
+    big = max(positions, key=lambda p: p["weight_pct"] or 0, default=None)
+    if big and len(positions) > 1 and (big["weight_pct"] or 0) > CONCENTRATION_WARN_PCT:
+        warnings.append(
+            f"Концентрация: {big['symbol']} — {big['weight_pct']:g}% стоимости позиций. Одна бумага определяет "
+            "почти весь результат счёта."
+        )
+    if n_stale:
+        warnings.append(f"Цены устарели у {n_stale} поз.: нереализованный результат и риск могут быть неточными.")
+    if n_missing:
+        warnings.append(f"Нет рыночной цены у {n_missing} поз.: они оценены по цене входа, нереализованный результат неизвестен.")
     if capital is None:
         warnings.append("Капитал счёта не задан: доли и свободные средства посчитать нельзя.")
-    return {
+    if not positions:
+        truth_status = "ok"
+    elif n_missing == len(positions):
+        truth_status = "unmarked"
+    elif n_missing or n_stale:
+        truth_status = "partial"
+    else:
+        truth_status = "ok"
+    last_entry = max((e.ts for e in entries), default=None)
+    out = {
         "market": account.market, "name": account.name, "currency": account.currency,
         "capital": capital, "equity": None if equity is None else round(equity, 2),
+        "equity_complete": marked_all and n_stale == 0 if positions else True,
         "free": None if free is None else round(free, 2),
-        "realized_total": round(realized_total, 2), "daily_pnl": round(daily_pnl, 2),
+        "realized_total": round(realized_total, 2), "unrealized_total": round(unrealized_total, 2),
+        "daily_pnl": round(daily_pnl, 2),
         "daily_limit": None if daily_limit is None else round(daily_limit, 2), "daily_limit_breached": daily_breached,
         "entries_today": day_entries, "max_trades_per_day": account.max_trades_per_day, "trades_limit_reached": trades_breached,
-        "exposure": round(exposure, 2), "exposure_pct": pct(exposure),
+        "exposure": round(exposure, 2), "exposure_pct": pct(exposure), "exposure_cost": round(cost_total, 2),
         "open_risk": round(open_risk, 2), "heat_pct": heat_pct, "max_open_risk_pct": account.max_open_risk_pct,
         "positions": positions, "unprotected": unprotected, "warnings": warnings,
+        "truth": {
+            "status": truth_status,
+            "sources": {
+                "journal": {"entries": len(entries), "last_entry_ts": last_entry},
+                "market": {"marked": len(positions) - n_missing - n_stale, "stale": n_stale, "missing": n_missing},
+                "broker": {"connected": False},
+            },
+            "reconciliation": reconcile(positions, broker) if broker is not None
+            else {"status": "not_connected", "differences": []},
+        },
         "notes": [
-            "Без рыночных цен: нереализованный результат не учитывается.",
             "Риск по стопу — расчётный сценарий, а не гарантированный максимум потерь.",
+            "Дневной результат — только зафиксированный продажами; нереализованное изменение в него не входит.",
+            "Нереализованный результат — без учёта комиссии выхода и налогов.",
         ],
     }
+    if n_missing:
+        out["notes"].insert(0, "Часть позиций без рыночных цен: они оценены по цене входа.")
+    return out
+
+
+def reconcile(
+    compass_positions: list[dict[str, Any]], broker: list[dict[str, Any]],
+    qty_tol: float = QTY_TOL, price_tol_pct: float = PRICE_TOL_PCT,
+) -> dict[str, Any]:
+    """Сверка позиций журнала с выпиской брокера. Расхождения показываются, а не сливаются: что правильно,
+    решает пользователь. broker — [{symbol, qty, avg_price?}]; средняя цена сверяется, только если она есть."""
+    ours = {p["symbol"]: p for p in compass_positions}
+    theirs: dict[str, dict[str, Any]] = {}
+    for b in broker:
+        sym = str(b["symbol"])
+        prev = theirs.get(sym)
+        theirs[sym] = {**b, "qty": float(b["qty"]) + (float(prev["qty"]) if prev else 0.0)}
+    diffs: list[dict[str, Any]] = []
+    for sym in sorted(set(ours) | set(theirs)):
+        o, b = ours.get(sym), theirs.get(sym)
+        if o is None and b is not None:
+            if b["qty"] > qty_tol:
+                diffs.append({"symbol": sym, "kind": "missing_in_journal", "journal_qty": 0.0, "broker_qty": b["qty"],
+                              "message": f"{sym}: у брокера {b['qty']:g}, в журнале позиции нет. Запишите сделку или проверьте выписку."})
+            continue
+        if b is None and o is not None:
+            diffs.append({"symbol": sym, "kind": "missing_at_broker", "journal_qty": o["qty"], "broker_qty": 0.0,
+                          "message": f"{sym}: в журнале {o['qty']:g}, у брокера позиции нет. Возможно, продажа не записана."})
+            continue
+        assert o is not None and b is not None
+        if abs(o["qty"] - b["qty"]) > qty_tol:
+            diffs.append({"symbol": sym, "kind": "qty_mismatch", "journal_qty": o["qty"], "broker_qty": b["qty"],
+                          "message": f"{sym}: количество в журнале {o['qty']:g}, у брокера {b['qty']:g}."})
+            continue
+        bp = b.get("avg_price")
+        if bp and o["avg_price"] and abs(o["avg_price"] / float(bp) - 1) * 100 > price_tol_pct:
+            diffs.append({"symbol": sym, "kind": "price_mismatch", "journal_price": o["avg_price"], "broker_price": float(bp),
+                          "message": f"{sym}: средняя цена в журнале {o['avg_price']:g}, у брокера {float(bp):g} "
+                                     "(комиссии и округление могут давать небольшую разницу)."})
+    return {"status": "mismatch" if diffs else "match", "differences": diffs, "checked": len(set(ours) | set(theirs))}
 
 
 def assess_new_position(snap: dict[str, Any], account: Account, risk_amount: float, cost: float) -> dict[str, Any]:

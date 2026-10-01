@@ -168,6 +168,11 @@ class ValidateRequest(BacktestRequest):
     grid: dict[str, list[int]] = Field(default_factory=dict)  # параметр -> значения для перебора; пусто — без подбора
 
 
+class ReconcileRequest(BaseModel):
+    market: str
+    positions: list[dict] = Field(max_length=500)  # [{symbol, qty, avg_price?}] из выписки брокера
+
+
 class RiskRequest(BaseModel):
     market: str
     symbol: str
@@ -682,7 +687,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "Рубли и USDT не пересчитываются друг в друга."
             )
         risk_pct = req.risk_pct if req.risk_pct is not None else acc.risk_pct
-        snap = portfolio.snapshot(acc, svc.journal.list(market=req.market, mode="real"), svc.now_ms())
+        snap = account_snapshot(acc)
         available = req.available
         if available is None and snap["free"] is not None:
             available = max(0.0, snap["free"])  # свободные средства с учётом открытых позиций и результата
@@ -778,13 +783,44 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         except KeyError:
             raise HTTPException(404, f"Счёта для рынка {market} нет") from None
 
+    def marks_for(market: str, symbols: list[str]) -> dict[str, portfolio.Mark]:
+        """Рыночные цены для оценки позиций: последняя цена из свечей рабочего таймфрейма рынка.
+        Источник недоступен и кэша нет — метки не будет, позиция останется оценённой по входу."""
+        tf = svc.settings.get(f"tf_{market}")
+        max_age = int(max(1800, min(3 * TIMEFRAME_MS[tf] / 1000, 3 * 86_400)))
+        out: dict[str, portfolio.Mark] = {}
+        for symbol in symbols:
+            try:
+                res = svc.cache.get(market, symbol, tf, 5)
+            except (MarketError, KeyError):
+                continue
+            if res.candles:
+                last = res.candles[-1]
+                out[symbol] = portfolio.Mark(last.close, last.ts, res.fetched_at, res.stale, res.source, max_age)
+        return out
+
+    def account_snapshot(acc: Account, broker: list[dict] | None = None) -> dict:
+        entries = svc.journal.list(market=acc.market, mode="real")
+        held = sorted({p["symbol"] for p in portfolio._open_positions(entries)})
+        return portfolio.snapshot(acc, entries, svc.now_ms(), marks_for(acc.market, held), broker)
+
+    @app.post("/api/reconcile")
+    def reconcile_with_broker(req: ReconcileRequest) -> dict:
+        """Сверка журнала с выпиской брокера, введённой вручную. Ничего не сохраняет и не исправляет."""
+        acc = accounts_store().get(req.market)
+        if acc is None:
+            raise HTTPException(404, f"Счёта для рынка {req.market} нет")
+        for b in req.positions:
+            if not isinstance(b.get("symbol"), str) or isinstance(b.get("qty"), bool) or not isinstance(b.get("qty"), int | float):
+                raise ValueError("Каждая позиция выписки: тикер (текст) и количество (число)")
+        snap = account_snapshot(acc, req.positions)
+        return {"market": req.market, **snap["truth"]["reconciliation"],
+                "notes": ["Compass ничего не исправляет: выберите, чья запись верна, и поправьте журнал сами."]}
+
     @app.get("/api/day")
     def day_panel() -> dict:
         """Панель дня по каждому счёту отдельно: без сложения рублей и USDT."""
-        now = svc.now_ms()
-        snaps = [
-            portfolio.snapshot(a, svc.journal.list(market=a.market, mode="real"), now) for a in accounts_store().list()
-        ]
+        snaps = [account_snapshot(a) for a in accounts_store().list()]
         return {
             "accounts": snaps,
             "unseen_signals": len(svc.signals.list(500, True)),
