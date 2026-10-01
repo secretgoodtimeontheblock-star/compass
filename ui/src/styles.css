@@ -1895,3 +1895,74 @@ tbody tr:hover {
   .overlays label { min-height: 44px; }
   .command-menu [cmdk-item] { min-height: 44px; }
 }
+
+/* иконки тикеров и готовые наборы */
+.ticker-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  user-select: none;
+}
+.watch-select {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+}
+.watch-select .ticker-icon {
+  grid-row: 1 / span 2;
+}
+.watch-select .nm {
+  grid-column: 2;
+}
+.search-results button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.presets .preset-group {
+  border-top: 1px solid var(--border);
+}
+.presets .preset-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.presets .preset-head .count {
+  margin-left: auto;
+}
+.presets .preset-head .chev {
+  transition: transform 0.15s;
+}
+.presets .preset-head[aria-expanded="true"] .chev {
+  transform: rotate(180deg);
+}
+.presets .preset-body {
+  padding: 0 12px 10px;
+}
+.presets .preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.presets .preset-chips .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.presets .preset-chips .btn[aria-pressed="true"] {
+  opacity: 0.55;
+}

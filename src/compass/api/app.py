@@ -46,6 +46,7 @@ from compass.replay import ReplayStore
 from compass import execution
 from compass import cockpit as cockpit_mod
 from compass import discipline, glossary
+from compass import presets as presets_mod
 from compass import lab as lab_mod
 from compass.integrity import integrity_report
 from compass.risk import WORSE_SLIPPAGE_MULT, position_size
@@ -276,6 +277,32 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         adapter(item.market)
         svc.watchlist.add(Instrument(item.symbol, item.name or item.symbol, item.market))
         return item.model_dump()
+
+    @app.get("/api/presets")
+    def presets_list(market: str) -> list[dict]:
+        """Готовые наборы по темам (сектора акций, категории монет); в ответ попадают только тикеры из справочника биржи."""
+        adapter(market)
+        have = {i.symbol for i in svc.watchlist.list() if i.market == market}
+        out = presets_mod.groups(market)
+        for g in out:
+            for i in g["instruments"]:
+                i["watched"] = i["symbol"] in have
+        return out
+
+    @app.post("/api/presets/{market}/{group_id}/add")
+    def presets_add(market: str, group_id: str) -> dict:
+        """Добавляет в избранное все тикеры набора, которых там ещё нет."""
+        adapter(market)
+        group = presets_mod.find(market, group_id)
+        if group is None:
+            raise HTTPException(404, "Такого набора нет")
+        have = {i.symbol for i in svc.watchlist.list() if i.market == market}
+        added = 0
+        for i in group["instruments"]:
+            if i["symbol"] not in have:
+                svc.watchlist.add(Instrument(i["symbol"], i["name"], market, i["kind"]))
+                added += 1
+        return {"added": added, "already": len(group["instruments"]) - added, "title": group["title"]}
 
     @app.delete("/api/watchlist/{market}/{symbol:path}", status_code=204)
     def watchlist_remove(market: str, symbol: str) -> None:

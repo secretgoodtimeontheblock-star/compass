@@ -21,6 +21,7 @@ import type {
   Market,
   MarketId,
   OosResponse,
+  PresetGroup,
   PlanDto,
   PlanReview,
   Position,
@@ -99,6 +100,9 @@ export const api = {
   backtest: (body: BacktestRequestBody) => request<BacktestResponse>("/api/backtest", json("POST", body)),
   lab: (body: BacktestRequestBody & { grid: Record<string, number[]>; folds: number; mode: "rolling" | "anchored" }) =>
     request<LabResponse>("/api/lab", json("POST", body)),
+  presets: (market: MarketId) => request<PresetGroup[]>(`/api/presets?${qs({ market })}`),
+  addPreset: (market: MarketId, group: string) =>
+    request<{ added: number; already: number; title: string }>(`/api/presets/${market}/${group}/add`, { method: "POST" }),
   cockpit: () => request<CockpitResponse>("/api/cockpit"),
   glossary: () => request<GlossaryTerm[]>("/api/glossary"),
   changed: (hours = 24) => request<ChangedResponse>(`/api/discipline/changed?${qs({ hours })}`),

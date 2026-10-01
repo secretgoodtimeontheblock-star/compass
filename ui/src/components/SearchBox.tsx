@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import type { Instrument, MarketId } from "../types";
 import { Icon } from "./Icon";
+import { TickerIcon } from "./TickerIcon";
 
 interface Props {
   market: MarketId;
@@ -140,6 +141,7 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
               role="option"
               aria-selected={index === active}
             >
+              <TickerIcon symbol={r.symbol} market={r.market} kind={r.kind} name={r.name} size={20} />
               <b>{r.symbol}</b>
               <span className="muted">
                 {[KIND[r.kind ?? ""], r.name !== r.symbol ? r.name : ""].filter(Boolean).join(" · ")}

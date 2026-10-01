@@ -1,5 +1,7 @@
 import type { Instrument, MarketId } from "../types";
 import { Icon } from "./Icon";
+import { Presets } from "./Presets";
+import { TickerIcon } from "./TickerIcon";
 
 // Подсказки для новичка: ликвидные тикеры, с которых удобно начать знакомство.
 const QUICK: Record<MarketId, Instrument[]> = {
@@ -24,12 +26,13 @@ interface Props {
   onSelect: (i: Instrument) => void;
   onRemove: (i: Instrument) => void;
   onQuickAdd: (i: Instrument) => void;
+  onPresetsAdded?: () => void;
   paused: Set<string>;
   onTogglePause: (i: Instrument) => void;
   onScreener: () => void;
 }
 
-export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd, paused, onTogglePause, onScreener }: Props) {
+export function Watchlist({ market, items, selected, onSelect, onRemove, onQuickAdd, onPresetsAdded, paused, onTogglePause, onScreener }: Props) {
   const have = new Set(items.map((i) => i.symbol));
   const quick = QUICK[market].filter((q) => !have.has(q.symbol));
 
@@ -57,6 +60,7 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
                 aria-current={i.symbol === selected ? "true" : undefined}
                 onClick={() => onSelect(i)}
               >
+                <TickerIcon symbol={i.symbol} market={i.market} kind={i.kind} name={i.name} />
                 <span className="sym">{i.symbol}</span>
                 {i.name !== i.symbol && <span className="nm">{i.name}</span>}
               </button>
@@ -85,12 +89,13 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
             <div className="quick">
               {quick.map((q) => (
                 <button key={q.symbol} className="btn small" onClick={() => onQuickAdd(q)}>
-                  <Icon name="plus" size={12} /> {q.symbol}
+                  <TickerIcon symbol={q.symbol} market={q.market} size={16} /> {q.symbol}
                 </button>
               ))}
             </div>
           </>
         )}
+        <Presets market={market} onQuickAdd={onQuickAdd} onChanged={onPresetsAdded} />
       </div>
     </>
   );

@@ -6,6 +6,7 @@ import type { Instrument, JournalDraft, PlanDto, RiskResponse, Signal } from "..
 import { AiAnswer } from "./AiAnswer";
 import { CockpitPanel } from "./CockpitPanel";
 import { DayPanel } from "./DayPanel";
+import { TickerIcon } from "./TickerIcon";
 
 interface Props {
   signals: Signal[];
@@ -137,7 +138,7 @@ function SignalCard({
           style={{ padding: 0, color: "var(--text)", fontWeight: 700, fontSize: 14 }}
           onClick={() => onSelect({ market: s.market, symbol: s.symbol, name: s.symbol })}
         >
-          {s.symbol}
+          <TickerIcon symbol={s.symbol} market={s.market} size={18} /> {s.symbol}
         </button>
         <span className={`side-tag ${buy ? "up" : "down"}`}>{buy ? "ВХОД" : "ВЫХОД"}</span>
       </div>

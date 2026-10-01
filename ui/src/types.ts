@@ -799,3 +799,15 @@ export interface ViolationsResponse {
   status: string;
   text: string;
 }
+
+export interface PresetInstrument extends Instrument {
+  watched: boolean;
+}
+
+export interface PresetGroup {
+  id: string;
+  title: string;
+  icon: string;
+  note: string;
+  instruments: PresetInstrument[];
+}

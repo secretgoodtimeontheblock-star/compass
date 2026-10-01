@@ -18,6 +18,7 @@ import { type ChartLine, type Overlays, PriceChart } from "./components/PriceCha
 import { SearchBox } from "./components/SearchBox";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SignalsPanel } from "./components/SignalsPanel";
+import { TickerIcon } from "./components/TickerIcon";
 import { Tip, TipProvider } from "./components/Tip";
 import { Watchlist } from "./components/Watchlist";
 import { AiContext } from "./lib/ai-context";
@@ -377,6 +378,7 @@ export default function App() {
             onSelect={selectInstrument}
             onRemove={removeFromWatch}
             onQuickAdd={addToWatch}
+            onPresetsAdded={() => watchApi.reload()}
             paused={new Set(settings?.paused_instruments ?? [])}
             onTogglePause={togglePause}
             onScreener={() => setScreenerOpen(true)}
@@ -403,6 +405,7 @@ export default function App() {
           <div className="chart-head">
             {selected ? (
               <>
+                <TickerIcon symbol={selected.symbol} market={selected.market} kind={selected.kind} name={selected.name} size={26} />
                 <span className="title">{selected.symbol}</span>
                 {selected.name !== selected.symbol && <span className="muted">{selected.name}</span>}
                 {last && <span className="price num">{fmtPrice(last.c)}</span>}
