@@ -43,6 +43,7 @@ from compass.models import (
 from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
 from compass import execution
+from compass.integrity import integrity_report
 from compass.risk import WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
@@ -434,6 +435,9 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             )
         if m.get("gap_exits"):
             warnings.append(f"Выходов по гэпу: {m['gap_exits']}. Исполнение было хуже уровня стопа.")
+        integrity = integrity_report(strat, params, df, target, bt, req.capital, model.effective_slippage_pct, rules, model.fee_pct)
+        if not integrity["passed"]:
+            warnings.insert(0, integrity["summary"])
         part = m.get("max_participation_pct")
         if part and part > execution.LIQUIDITY_WARN_PCT:
             warnings.append(
@@ -480,6 +484,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 # получили меньше запрошенного — у источника больше нет; ровно столько — раньше история могла быть
                 "exhausted": len(res.candles) < req.limit,
             },
+            "integrity": integrity,
             "validation": {
                 "walk_forward": walk_forward(df, bt, req.capital),
                 "resampling": trade_resampling(bt.trades),
