@@ -13,8 +13,9 @@ from pydantic import BaseModel, Field
 from compass.ai import prompts
 from compass.ai.providers import AiError, AiNotReady
 from compass.ai.service import AiResult
-from compass import execution
+from compass import discipline, execution, glossary
 from compass.backtest import backtest
+from compass.api.schemas import BacktestRequest
 from compass.markets.base import MarketError
 from compass.models import closed_candles
 from compass.strategies import STRATEGIES, candles_to_df
@@ -47,7 +48,30 @@ def _dto(r: AiResult) -> dict:
     return asdict(r)
 
 
-def register_ai_routes(app: FastAPI, svc: Services) -> None:
+class ChangedRequest(BaseModel):
+    hours: int = Field(24, ge=1, le=168)
+    refresh: bool = False
+
+
+class DisciplineRequest(BaseModel):
+    days: int = Field(7, ge=1, le=31)
+    refresh: bool = False
+
+
+class CompareRequest(BaseModel):
+    plan_id: int
+    refresh: bool = False
+
+
+class ConceptRequest(BaseModel):
+    concept_id: str
+    context: str | None = Field(None, max_length=200)
+    refresh: bool = False
+
+
+def register_ai_routes(app: FastAPI, svc: Services, hooks: dict) -> None:
+    """hooks — вычисления, которыми владеет app.py (бэктест, кокпит, недельные разборы, сравнение): так AI получает
+    те же факты, что и экраны, а не их копию."""
     @app.exception_handler(AiNotReady)
     def _not_ready(_req, exc: AiNotReady):
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=409)
@@ -130,3 +154,31 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
                 warning = prompts.UNAVAILABLE_WARNING
         prompt = prompts.teach(req.question.strip(), snapshot, req.symbol)
         return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))
+
+    @app.post("/api/ai/what-changed")
+    def what_changed(req: ChangedRequest) -> dict:
+        facts = hooks["changed"](req.hours)
+        return _dto(svc.ai.run(prompts.what_changed(discipline.facts_text_changed(facts)), req.refresh))
+
+    @app.post("/api/ai/explain-backtest")
+    def explain_backtest(req: BacktestRequest) -> dict:
+        result = hooks["backtest"](req)  # расчёт «для объяснения»: в историю экспериментов не пишется
+        facts = discipline.facts_text_weaknesses(result, result["weaknesses"])
+        return _dto(svc.ai.run(prompts.weak_assumptions(facts), False))
+
+    @app.post("/api/ai/discipline")
+    def discipline_review(req: DisciplineRequest) -> dict:
+        facts = discipline.facts_text_discipline(hooks["discipline"](req.days))
+        return _dto(svc.ai.run(prompts.discipline_review(facts), req.refresh))
+
+    @app.post("/api/ai/compare-trade")
+    def compare_trade(req: CompareRequest) -> dict:
+        facts = discipline.facts_text_comparison(hooks["compare"](req.plan_id))
+        return _dto(svc.ai.run(prompts.compare_trade(facts), req.refresh))
+
+    @app.post("/api/ai/explain-concept")
+    def explain_concept(req: ConceptRequest) -> dict:
+        t = glossary.term(req.concept_id)
+        if t is None:
+            raise HTTPException(404, "Такого понятия нет в глоссарии")
+        return _dto(svc.ai.run(prompts.explain_concept(t["term"], t["short"], t["why"], req.context), req.refresh))

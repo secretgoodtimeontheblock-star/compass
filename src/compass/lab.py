@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from compass import glossary
 from compass.backtest import BacktestResult, Rules, Trade, backtest
 from compass.indicators import atr, sma
 from compass.oos import MIN_TRAIN_CANDLES, expand_grid, score
@@ -640,7 +641,7 @@ def build_verdict(
         status, head = "robust", "Результат пережил проверки на непросмотренных данных"
     else:
         status, head = "mixed", "Результат неоднозначный: есть и устойчивые, и слабые стороны"
-    return {"status": status, "headline": head, "findings": f, "candles": candles,
+    return {"status": status, "headline": head, "findings": glossary.attach(f), "candles": candles,
             "disclaimer": "Это описание прошлого. Устойчивость на истории не гарантирует прибыль в будущем."}
 
 

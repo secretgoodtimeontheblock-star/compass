@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from compass import glossary
+
 PLAN_STALE_DAYS = 14  # план без входа дольше — повод пересмотреть: рынок мог уйти
 SEVERITY_ORDER = {"stop": 0, "bad": 1, "attention": 2, "info": 3}
 MAX_ITEMS = 12
@@ -34,8 +36,10 @@ def _signed(v: float, cur: str) -> str:
     return f"{v:+,.2f} {cur}".replace(",", " ")
 
 
-def _attn(out: list[dict[str, Any]], severity: str, section: str, text: str, hint: str = "") -> None:
-    out.append({"severity": severity, "section": section, "text": text, "hint": hint})
+def _attn(out: list[dict[str, Any]], severity: str, section: str, text: str, hint: str = "", code: str = "") -> None:
+    """code — машинный код причины: по нему интерфейс показывает «что это значит» (понятия из глоссария)."""
+    out.append({"severity": severity, "section": section, "text": text, "hint": hint, "code": code,
+                "learn": glossary.concepts_for(code)})
 
 
 def build(
@@ -184,7 +188,7 @@ def build(
                 rules_items.append({"market": a["market"], "code": "concentration", "severity": "attention", "text": f"{a['name']}: {w}"})
     for it in rules_items:
         _attn(attention, it["severity"], "rules", it["text"],
-              "Ваш собственный план на сегодня — остановиться." if it["code"] == "daily_loss" else "")
+              "Ваш собственный план на сегодня — остановиться." if it["code"] == "daily_loss" else "", it["code"])
     for p in plan_items:
         for fl in p["flags"]:
             if "выше бюджета" in fl:
@@ -192,7 +196,7 @@ def build(
     if rules_items:
         sev = "stop" if stop_today else ("bad" if any(i["severity"] == "bad" for i in rules_items) else "attention")
         q_rules = _q("rules", "Нарушаю ли я собственные правила?", f"Нарушено или достигнуто правил: {len(rules_items)}.",
-                     "bad" if sev == "stop" else sev, rules_items)
+                     "bad" if sev == "stop" else sev, glossary.attach(rules_items))
     else:
         q_rules = _q("rules", "Нарушаю ли я собственные правила?", "Нарушений ваших лимитов и планов нет.", "ok", [])
 
@@ -209,13 +213,15 @@ def build(
             data_status = "bad"
             data_lines.append(f"{a['name']}: нет рыночных цен, позиции оценены по входу")
             _attn(attention, "bad", "data", f"{a['name']}: нет рыночных цен — нереализованный результат и риск неизвестны.",
-                  "Проверьте источник данных и подключение.")
+                  "Проверьте источник данных и подключение.", "unmarked")
         elif t["status"] == "partial":
             data_status = "attention" if data_status == "ok" else data_status
             data_lines.append(f"{a['name']}: цены устарели или отсутствуют у части позиций")
-            _attn(attention, "attention", "data", f"{a['name']}: оценка по ценам неполная ({m['stale']} устар., {m['missing']} без цены).")
+            _attn(attention, "attention", "data", f"{a['name']}: оценка по ценам неполная ({m['stale']} устар., {m['missing']} без цены).",
+                  code="stale_marks")
         if t["reconciliation"]["status"] == "mismatch":
-            _attn(attention, "bad", "data", f"{a['name']}: журнал расходится с выпиской брокера.", "Сверьте позиции и поправьте журнал.")
+            _attn(attention, "bad", "data", f"{a['name']}: журнал расходится с выпиской брокера.", "Сверьте позиции и поправьте журнал.",
+                  "reconciliation_mismatch")
             data_status = "bad"
     for s in problem_sources:
         data_status = "bad" if data_status == "bad" else "attention"

@@ -9,7 +9,6 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -24,6 +23,7 @@ from compass.accounts import MARKET_TZ, Account, AccountStore
 from compass.ai.service import AiService
 from compass.api.ai_routes import register_ai_routes
 from compass.api.guard import install_guard
+from compass.api.schemas import BacktestRequest, LabRequest, ValidateRequest
 from compass.api.replay_routes import register_replay_routes
 from compass.backtest import Rules, backtest
 from compass.cache import CandleCache
@@ -45,6 +45,7 @@ from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
 from compass import execution
 from compass import cockpit as cockpit_mod
+from compass import discipline, glossary
 from compass import lab as lab_mod
 from compass.integrity import integrity_report
 from compass.risk import WORSE_SLIPPAGE_MULT, position_size
@@ -152,40 +153,9 @@ class WatchItem(BaseModel):
     name: str = ""
 
 
-class BacktestRequest(BaseModel):
-    market: str
-    symbol: str
-    tf: str = "1d"
-    strategy: str
-    params: dict[str, int] = Field(default_factory=dict)
-    limit: int = Field(1000, ge=10, le=20000)  # для внутридневных таймфреймов нужна история глубже 5000 свечей
-    capital: float = 100_000.0
-    fee_pct: float = 0.05
-    slippage_pct: float = 0.05
-    spread_pct: float | None = Field(None, ge=0, lt=100)  # None — спред профиля рынка
-    # предельная доля объёма свечи в заявке: None — размер не ограничивается (доля всё равно считается)
-    max_volume_pct: float | None = Field(None, gt=0, le=100)
-    # стопы, цели и размер по риску; всё пусто — прежний режим «весь капитал, выход по сигналу»
-    stop_atr_mult: float | None = Field(None, gt=0, le=20)
-    target_r: float | None = Field(None, gt=0, le=50)
-    risk_pct: float | None = Field(None, gt=0, le=100)
-    close_eod: bool = False  # внутридневная торговля: закрывать позицию к концу торгового дня
-
-
-class ValidateRequest(BacktestRequest):
-    train_pct: float = Field(70, ge=50, le=90)  # доля истории на подбор; остальное — проверка
-    grid: dict[str, list[int]] = Field(default_factory=dict)  # параметр -> значения для перебора; пусто — без подбора
-
-
 class ReconcileRequest(BaseModel):
     market: str
     positions: list[dict] = Field(max_length=500)  # [{symbol, qty, avg_price?}] из выписки брокера
-
-
-class LabRequest(BacktestRequest):
-    grid: dict[str, list[int]] = Field(default_factory=dict)  # не больше двух параметров; пусто — правило фиксировано
-    folds: int = Field(4, ge=3, le=8)  # число независимых проверочных окон
-    mode: Literal["rolling", "anchored"] = "rolling"  # скользящее или растущее обучение
 
 
 class RiskRequest(BaseModel):
@@ -411,6 +381,10 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
 
     @app.post("/api/backtest")
     def run_backtest(req: BacktestRequest) -> dict:
+        return compute_backtest(req)
+
+    def compute_backtest(req: BacktestRequest, record: bool = True) -> dict:
+        """record=False — расчёт «для объяснения»: в историю экспериментов не пишется и число проб не растёт."""
         adapter(req.market)
         strat = STRATEGIES.get(req.strategy)
         if strat is None:
@@ -517,10 +491,14 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],
         }
-        prior = record_experiment("backtest", req, strat.id, params, 1, out["run_card"], {
-            k: metrics.get(k) for k in ("total_return_pct", "max_drawdown_pct", "trades", "avg_r", "sharpe")
-        })
-        out["trials"] = trials_dto(prior, 1)
+        if record:
+            prior = record_experiment("backtest", req, strat.id, params, 1, out["run_card"], {
+                k: metrics.get(k) for k in ("total_return_pct", "max_drawdown_pct", "trades", "avg_r", "sharpe")
+            })
+        else:
+            prior = svc.experiments.variants_tried(req.market, req.symbol, req.tf, strat.id) if svc.experiments else 0
+        out["trials"] = trials_dto(prior, 1 if record else 0)
+        out["weaknesses"] = discipline.backtest_weaknesses(out)
         return out
 
     def record_experiment(kind, req, strategy_id, params, variants, card, result, extra_config=None) -> int:
@@ -1185,7 +1163,74 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         if not svc.journal.remove(entry_id):
             raise HTTPException(404, "Записи нет в журнале")
 
-    register_ai_routes(app, svc)
+    # --- слой дисциплины и глоссарий ---
+
+    @app.get("/api/glossary")
+    def glossary_list() -> list[dict]:
+        """Короткие определения понятий: интерфейс показывает их рядом с находками, где они нужны."""
+        return glossary.all_terms()
+
+    def changed_facts(hours: int) -> dict:
+        now = svc.now_ms()
+        accounts = [account_snapshot(a) for a in accounts_store().list()]
+        entries = [{"ts": e.ts, "symbol": e.symbol, "side": e.side, "qty": e.qty, "price": e.price}
+                   for e in svc.journal.list(mode="real")]
+        ctx = signal_ctx()
+        signals = [signal_dto(sg, ctx) for sg in svc.signals.list(200)]
+        plans = [plan_dto(p) for p in svc.plans.list(None, None, 100)] if svc.plans is not None else []
+        moves = []
+        for a in accounts:
+            tf = svc.settings.get(f"tf_{a['market']}")
+            for p in a["positions"]:
+                try:
+                    candles_ = svc.cache.get(a["market"], p["symbol"], tf, 5).candles
+                except (MarketError, KeyError):
+                    continue
+                if len(candles_) >= 2 and candles_[-2].close > 0:
+                    moves.append({"market": a["market"], "symbol": p["symbol"], "mark_price": candles_[-1].close,
+                                  "change_pct": (candles_[-1].close / candles_[-2].close - 1) * 100})
+        return discipline.what_changed(now, hours, accounts, entries, signals, plans, moves)
+
+    @app.get("/api/discipline/changed")
+    def discipline_changed(hours: int = Query(24, ge=1, le=168)) -> dict:
+        """Что изменилось за окно: записи журнала, сигналы, планы, движение позиций. Всё считает код."""
+        facts = changed_facts(hours)
+        return {**facts, "text": discipline.facts_text_changed(facts)}
+
+    def discipline_data(days: int) -> dict:
+        now = svc.now_ms()
+        weeklies = [
+            review_week_mod.weekly(a, svc.journal.list(market=a.market, mode="real"), lambda uid: plan_store().get_by_uid(uid), now, days)
+            for a in accounts_store().list()
+        ]
+        return discipline.discipline_facts(decision_cockpit(), weeklies)
+
+    @app.get("/api/discipline/violations")
+    def discipline_violations(days: int = Query(7, ge=1, le=31)) -> dict:
+        """Где вы отступили от собственных правил и планов: текущие нарушения и картина недели."""
+        data = discipline_data(days)
+        return {**data, "text": discipline.facts_text_discipline(data)}
+
+    def compare_data(plan_id: int) -> dict:
+        store = plan_store()
+        plan = store.get(plan_id)
+        if plan is None:
+            raise HTTPException(404, "План не найден")
+        previous = [
+            (p, review(p, svc.journal.list(p.market, p.symbol, mode=None)))
+            for p in store.list(None, None, 200) if p.id is not None and plan.id is not None and p.id < plan.id
+        ]
+        return discipline.trade_comparison(plan, previous)
+
+    @app.get("/api/discipline/compare-trade")
+    def discipline_compare(plan_id: int) -> dict:
+        """Чем план отличается от ваших прежних планов: размер, риск, стоп, цель. Только отличия, без оценок."""
+        return compare_data(plan_id)
+
+    register_ai_routes(app, svc, {
+        "backtest": lambda req: compute_backtest(req, record=False),
+        "changed": changed_facts, "discipline": discipline_data, "compare": compare_data,
+    })
     register_replay_routes(app, svc, instrument_info, adapter, CRYPTO_QTY_STEP)
 
     # Интерфейс — последним: маршруты /api/* должны матчиться раньше статики.
