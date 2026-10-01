@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -43,6 +44,7 @@ from compass.models import (
 from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
 from compass import execution
+from compass import lab as lab_mod
 from compass.integrity import integrity_report
 from compass.risk import WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
@@ -177,6 +179,12 @@ class ValidateRequest(BacktestRequest):
 class ReconcileRequest(BaseModel):
     market: str
     positions: list[dict] = Field(max_length=500)  # [{symbol, qty, avg_price?}] из выписки брокера
+
+
+class LabRequest(BacktestRequest):
+    grid: dict[str, list[int]] = Field(default_factory=dict)  # не больше двух параметров; пусто — правило фиксировано
+    folds: int = Field(4, ge=3, le=8)  # число независимых проверочных окон
+    mode: Literal["rolling", "anchored"] = "rolling"  # скользящее или растущее обучение
 
 
 class RiskRequest(BaseModel):
@@ -570,6 +578,48 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         prior = record_experiment(
             "validate", req, strat.id, chosen, variants, card, summary,
             {"train_pct": req.train_pct, "grid": req.grid},
+        )
+        warnings = []
+        if open_dropped:
+            warnings.append("Последняя свеча ещё не закрыта и в расчёт не входит.")
+        if res.stale:
+            warnings.append("Источник данных недоступен — расчёт по сохранённым данным.")
+        return {
+            **result, "strategy": strat.id, "strategy_version": card["strategy_version"], "run_card": card,
+            "data_quality": quality, "warnings": warnings, "trials": trials_dto(prior, variants),
+        }
+
+    @app.post("/api/lab")
+    def validation_lab(req: LabRequest) -> dict:
+        """Лаборатория проверки: walk-forward в нескольких окнах, карта устойчивости, bootstrap, концентрация прибыли,
+        просадки, режимы, стресс расходов, PBO и Deflated Sharpe. Вердикт — простым языком, детали — в слое исследователя."""
+        adapter(req.market)
+        strat = STRATEGIES.get(req.strategy)
+        if strat is None:
+            raise HTTPException(404, f"Неизвестная стратегия: {req.strategy}")
+        base = strat.resolve(req.params)
+        res, df, open_dropped, quality = load_series(req, min_candles=lab_mod.MIN_WINDOW * req.folds)
+        rules = make_rules(req)
+        model = exec_model(req)
+        prior = svc.experiments.variants_tried(req.market, req.symbol, req.tf, strat.id) if svc.experiments else 0
+        result = lab_mod.run_lab(
+            strat, base, req.grid, df, folds=req.folds, mode=req.mode, capital=req.capital, fee_pct=model.fee_pct,
+            slippage_pct=model.slippage_pct, spread_pct=model.spread_pct, rules=rules,
+            max_participation_pct=model.max_participation_pct, prior_variants=prior,
+        )
+        card = run_card(
+            df, market=req.market, symbol=req.symbol, tf=req.tf, strategy=strat.id, params=base, capital=req.capital,
+            fee_pct=req.fee_pct, slippage_pct=req.slippage_pct, stale=res.stale,
+            strategy_version=strategy_version(strat, base), rules=rules_dict(rules),
+            spread_pct=model.spread_pct, max_participation_pct=model.max_participation_pct,
+        )
+        variants = result["multiple_testing"]["variants_this_run"]
+        wf = result["walk_forward"]["summary"]
+        record_experiment(
+            "validate", req, strat.id, base, variants, card,
+            {"lab": True, "verdict": result["verdict"]["status"], "folds": wf["folds"],
+             "profitable_folds": wf["profitable_folds"], "stitched_return_pct": wf["stitched_return_pct"]},
+            {"lab": True, "folds": req.folds, "mode": req.mode, "grid": req.grid},
         )
         warnings = []
         if open_dropped:
