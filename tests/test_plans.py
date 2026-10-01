@@ -13,6 +13,7 @@ from compass.journal import Entry, Journal
 from compass.models import Instrument
 from compass.plans import Plan, PlanStore, review
 from compass.strategies import STRATEGIES, strategy_version
+from compass.validation import ENGINE_VERSION
 from tests.conftest import DAY, Env, day_candles
 
 BREAKOUT = [10.0] * 45 + [12.0]
@@ -255,7 +256,7 @@ def test_backtest_api_with_rules_reports_rules_assumptions_and_exit_reasons(env:
     c = client(env)
     base = {"market": "moex", "symbol": "SBER", "strategy": "sma_cross", "params": {"fast": 5, "slow": 20}, "limit": 300}
     plain = c.post("/api/backtest", json=base).json()
-    assert plain["run_card"]["rules"] is None and plain["run_card"]["engine_version"] == "3"
+    assert plain["run_card"]["rules"] is None and plain["run_card"]["engine_version"] == ENGINE_VERSION
     assert any("стоп-лоссов нет" in a for a in plain["run_card"]["assumptions"])
 
     r = c.post("/api/backtest", json={**base, "stop_atr_mult": 2.0, "target_r": 3.0, "risk_pct": 1.0})

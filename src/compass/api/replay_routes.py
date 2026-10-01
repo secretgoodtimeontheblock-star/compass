@@ -22,7 +22,7 @@ from compass.replay import (
     apply_bar,
     summarize,
 )
-from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT
+from compass import execution
 from compass.strategies import candles_to_df
 from compass.validation import data_fingerprint
 
@@ -41,6 +41,7 @@ class ReplayStart(BaseModel):
     capital: float | None = Field(None, gt=0)  # учебные деньги; по умолчанию — счёт рынка или условная сумма
     fee_pct: float | None = Field(None, ge=0, le=10)
     slippage_pct: float | None = Field(None, ge=0, le=10)
+    spread_pct: float | None = Field(None, ge=0, le=10)
 
 
 class ReplayOrder(BaseModel):
@@ -119,12 +120,13 @@ def register_replay_routes(
             )
         acc = svc.accounts.get(req.market) if svc.accounts else None
         capital = req.capital or (acc.capital if acc and acc.capital else DEFAULT_PAPER_CAPITAL.get(req.market, 100_000.0))
+        model = execution.model_for(req.market, req.fee_pct, req.slippage_pct, req.spread_pct)
         df = candles_to_df(candles)
         bars = [Bar(c.ts, c.open, c.high, c.low, c.close, c.volume) for c in candles]
         s = store.create(
             market=req.market, symbol=req.symbol, tf=req.tf, source=res.source or req.market, capital=capital,
-            fee_pct=req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1),
-            slippage_pct=req.slippage_pct if req.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT,
+            fee_pct=model.fee_pct,
+            slippage_pct=model.effective_slippage_pct,  # проскальзывание + половина спреда, как в бэктесте и плане
             bars=bars, start_index=len(bars) - 1 - req.replay_bars, data_hash=data_fingerprint(df),
         )
         return dto(s)

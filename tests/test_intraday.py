@@ -79,7 +79,7 @@ def test_intraday_backtest_reports_costs_history_and_delay(env: Env) -> None:
     body = r.json()
     ib = body["intraday"]
     assert ib["tf"] == "1m" and ib["trading_days"] >= 2 and ib["feed_delay_seconds"] == 900
-    assert ib["round_trip_cost_pct"] == pytest.approx(0.2)  # 2·(0.05 + 0.05)
+    assert ib["round_trip_cost_pct"] == pytest.approx(0.25)  # 2·(0.05 + 0.05) + спред МосБиржи 0.05
     assert [x["multiplier"] for x in ib["cost_stress"]] == [1, 2, 3]
     assert ib["cost_stress"][0]["return_pct"] == body["metrics"]["total_return_pct"]
     assert ib["cost_stress"][2]["return_pct"] < ib["cost_stress"][0]["return_pct"] and ib["cost_stress"][0]["trades"] > 10

@@ -298,7 +298,7 @@ def test_risk_api_prices_bond_as_percent_of_face(env: Env) -> None:
     )
     client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     r = client.post("/api/risk", json={"market": "moex", "symbol": "SU26238", "entry": 51.152, "stop": 49.0,
-                                       "fee_pct": 0, "slippage_pct": 0}).json()
+                                       "fee_pct": 0, "slippage_pct": 0, "spread_pct": 0}).json()
     assert r["qty"] == 46 and r["cost"] == pytest.approx(46 * (511.52 + 23.15), abs=0.01)
     assert any("Облигация" in w for w in r["warnings"])
     env.adapter.instrument_info = lambda s: InstrumentInfo(s, "moex", "scripted", price_unit="percent_of_face")

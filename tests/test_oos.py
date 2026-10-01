@@ -22,6 +22,7 @@ from compass.experiments import (
     multiple_testing_warning,
 )
 from compass.strategies import STRATEGIES, candles_to_df
+from compass.validation import ENGINE_VERSION
 from tests.conftest import DAY, Env, day_candles
 
 GRID = {"fast": [2, 3, 4, 6], "slow": [10, 15, 20]}
@@ -227,7 +228,7 @@ def test_validate_api_end_to_end_and_history_accumulates(env: Env) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["split"]["train_candles"] == 420 and body["chosen"]["params"]
-    assert body["strategy_version"].startswith("sma_cross/r1/") and body["run_card"]["engine_version"] == "3"
+    assert body["strategy_version"].startswith("sma_cross/r1/") and body["run_card"]["engine_version"] == ENGINE_VERSION
     assert body["trials"]["prior_variants"] == 0 and body["trials"]["this_run_variants"] == body["optimization"]["variants"]
     n = body["optimization"]["variants"]
     again = c.post("/api/validate", json={**BODY, "grid": GRID}).json()

@@ -22,9 +22,16 @@ i+1 — так же, как будет в жизни: сигнал видно т
 - если открытие для входа уже ниже стопа (или размер по риску округлился до нуля), вход пропускается и
   считается в `skipped_entries`; пока стратегия держит «в рынке», попытка повторяется на следующей свече.
 
-Ограничения (честно): ликвидность и размер заявки относительно объёма не учитываются; исполнение
-по цели считается по цене цели с проскальзыванием (консервативно); накопленный купонный доход,
-дивиденды и налоги не учитываются; прошлое не гарантирует будущее.
+Спред и ликвидность. spread_pct — разница между ценой покупки и продажи: вход и выход ухудшаются на
+его половину сверх проскальзывания. max_participation_pct (если задан) ограничивает размер входа долей
+объёма свечи исполнения; по умолчанию размер не ограничивается, но максимальная доля объёма,
+которую заняли бы заявки, всегда считается и возвращается в метриках — это сигнал, что исторический
+результат нельзя повторить деньгами такого размера. Выход не дробится: если на выходе заявка больше
+допустимой доли объёма, она всё равно исполняется целиком, но это считается в `illiquid_exits`.
+
+Ограничения (честно): очередь заявок и стакан не моделируются; исполнение по цели считается по цене цели
+с проскальзыванием (консервативно); накопленный купонный доход, дивиденды и налоги не учитываются;
+прошлое не гарантирует будущее.
 """
 
 from __future__ import annotations
@@ -103,13 +110,17 @@ def backtest(
     slippage_pct: float = 0.05,
     rules: Rules | None = None,
     start: int = 0,
+    spread_pct: float = 0.0,
+    max_participation_pct: float | None = None,
 ) -> BacktestResult:
     """start — индекс первой торгуемой свечи: более ранние нужны только индикаторам (ATR) и не торгуются.
     Так проверочный период считается отдельно, с собственным начальным капиталом, а не «хвостом» общего прогона."""
     if len(df) != len(target):
         raise ValueError("target и свечи разной длины")
-    if capital <= 0 or fee_pct < 0 or slippage_pct < 0:
+    if capital <= 0 or fee_pct < 0 or slippage_pct < 0 or spread_pct < 0:
         raise ValueError("Капитал должен быть больше нуля, комиссии — неотрицательны")
+    if max_participation_pct is not None and not 0 < max_participation_pct <= 100:
+        raise ValueError("Доля объёма свечи — больше 0 и не больше 100%")
     n = len(df)
     if n < 2:
         raise ValueError("Слишком мало свечей для бэктеста")
@@ -118,7 +129,9 @@ def backtest(
     rules = rules or Rules()
     rules.check()
 
-    fee, slip, uv = fee_pct / 100, slippage_pct / 100, rules.unit_value
+    eff_slip_pct = slippage_pct + spread_pct / 2  # спред делится между входом и выходом
+    fee, slip, uv = fee_pct / 100, eff_slip_pct / 100, rules.unit_value
+    vols = df["volume"].to_numpy()
     ts, opens, closes = df["ts"].to_numpy(), df["open"].to_numpy(), df["close"].to_numpy()
     highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
     tgt = target.to_numpy()
@@ -136,12 +149,30 @@ def backtest(
     trades: list[Trade] = []
     equity: list[tuple[int, float]] = []
     bars_in_market = 0
-    counters = {"stops": 0, "targets": 0, "gap_exits": 0, "ambiguous_bars": 0, "skipped_entries": 0, "eod_exits": 0}
+    counters: dict[str, float | int | None] = {
+        "stops": 0, "targets": 0, "gap_exits": 0, "ambiguous_bars": 0, "skipped_entries": 0, "eod_exits": 0,
+        "liquidity_capped_entries": 0, "illiquid_exits": 0, "zero_volume_fills": 0,
+    }
+    max_part = 0.0  # наибольшая доля объёма свечи, которую заняла бы заявка, %
+
+    def note_fill(i: int, q: float, *, exit_: bool) -> None:
+        """Считает долю объёма свечи исполнения; на выходе сверх лимита — только отмечает."""
+        nonlocal max_part
+        if q <= 0:
+            return
+        if vols[i] <= 0:
+            counters["zero_volume_fills"] += 1
+            return
+        share = q / vols[i] * 100
+        max_part = max(max_part, share)
+        if exit_ and max_participation_pct is not None and share > max_participation_pct + 1e-9:
+            counters["illiquid_exits"] += 1
     day_id = (ts.astype(np.int64) + rules.tz_offset_ms) // 86_400_000
     last_of_day = np.append(day_id[1:] != day_id[:-1], True)
 
     def close_position(i: int, price: float, reason: str) -> None:
         nonlocal cash, qty
+        note_fill(i, qty, exit_=True)
         proceeds = qty * price * uv * (1 - fee)
         cash += proceeds
         trades.append(
@@ -169,13 +200,20 @@ def backtest(
                 if rules.risk_pct is not None:
                     sized = position_size(
                         cash, rules.risk_pct, float(opens[i]), stop_level, lot=rules.lot,
-                        qty_step=rules.qty_step, fee_pct=fee_pct, slippage_pct=slippage_pct, available=cash,
+                        qty_step=rules.qty_step, fee_pct=fee_pct, slippage_pct=eff_slip_pct, available=cash,
                         unit_value=uv,
                     )
                     new_qty = sized.qty
                 else:
                     new_qty = cash / (price * uv * (1 + fee))
+                if new_qty > 0 and max_participation_pct is not None and vols[i] > 0:
+                    cap = vols[i] * max_participation_pct / 100
+                    if new_qty > cap:
+                        counters["liquidity_capped_entries"] += 1
+                        step = rules.qty_step or float(rules.lot)
+                        new_qty = math.floor(cap / step + 1e-9) * step
             if new_qty > 0:
+                note_fill(i, new_qty, exit_=False)
                 qty = new_qty
                 spent = qty * price * uv * (1 + fee)
                 cash -= spent
@@ -246,6 +284,8 @@ def backtest(
 
     metrics = _metrics(trades, equity, closes[start:], capital, bars_in_market, n - start)
     metrics.update(counters)
+    metrics["max_participation_pct"] = round(max_part, 4) if max_part else None
+    metrics["spread_pct"] = spread_pct
     return BacktestResult(trades, equity, metrics)
 
 

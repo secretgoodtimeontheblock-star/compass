@@ -89,17 +89,21 @@ def _metrics(bt: BacktestResult, ts: np.ndarray, capital: float) -> dict[str, An
     return apply_sample_rules(raw)[0]
 
 
-def _run(df, target, k, capital, fee, slip, rules, *, part: str) -> BacktestResult:
+def _run(df, target, k, capital, fee, slip, rules, *, part: str, extra: dict[str, Any] | None = None) -> BacktestResult:
+    """extra — остальные допущения исполнения (spread_pct, max_participation_pct), как в backtest()."""
+    xkw = extra or {}
     if part == "train":
-        return backtest(df.iloc[:k].reset_index(drop=True), target.iloc[:k].reset_index(drop=True), capital, fee, slip, rules)
-    return backtest(df, target, capital, fee, slip, rules, start=k)
+        return backtest(
+            df.iloc[:k].reset_index(drop=True), target.iloc[:k].reset_index(drop=True), capital, fee, slip, rules, **xkw
+        )
+    return backtest(df, target, capital, fee, slip, rules, start=k, **xkw)
 
 
 def evaluate(strat: Strategy, params: dict[str, int], df: pd.DataFrame, k: int, capital: float, fee: float,
-             slip: float, rules: Rules | None) -> dict[str, Any]:
+             slip: float, rules: Rules | None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     target = strat.target(df, params)
-    train = _run(df, target, k, capital, fee, slip, rules, part="train")
-    test = _run(df, target, k, capital, fee, slip, rules, part="test")
+    train = _run(df, target, k, capital, fee, slip, rules, part="train", extra=extra)
+    test = _run(df, target, k, capital, fee, slip, rules, part="test", extra=extra)
     ts = df["ts"].to_numpy()
     return {
         "train": _metrics(train, ts[:k], capital),
@@ -118,15 +122,17 @@ def run_oos(
     fee_pct: float,
     slippage_pct: float,
     rules: Rules | None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     k = split_index(len(df), train_pct)
+    extra = extra or {}
     combos, dropped = expand_grid(strat, base_params, grid) if grid else ([strat.resolve(base_params)], 0)
 
     # --- подбор: только период подбора ---
     rows = []
     for p in combos:
         target = strat.target(df, p)
-        train = _run(df, target, k, capital, fee_pct, slippage_pct, rules, part="train")
+        train = _run(df, target, k, capital, fee_pct, slippage_pct, rules, part="train", extra=extra)
         m = _metrics(train, df["ts"].to_numpy()[:k], capital)
         rows.append({"params": p, "score": score(train.metrics), "train": m, "_raw": train.metrics})
     eligible = [r for r in rows if r["score"] is not None]
@@ -162,12 +168,12 @@ def run_oos(
         return out
 
     chosen = chosen_row["params"]
-    ev = evaluate(strat, chosen, df, k, capital, fee_pct, slippage_pct, rules)
+    ev = evaluate(strat, chosen, df, k, capital, fee_pct, slippage_pct, rules, extra)
     out["chosen"] = {"params": chosen, "train": ev["train"], "test": ev["test"], "train_score": chosen_row["score"]}
 
     if optimized:  # для сравнения: что дал бы вариант «как есть», без подбора
         default = strat.resolve(base_params)
-        dev = evaluate(strat, default, df, k, capital, fee_pct, slippage_pct, rules)
+        dev = evaluate(strat, default, df, k, capital, fee_pct, slippage_pct, rules, extra)
         out["baseline"] = {"params": default, "train": dev["train"], "test": dev["test"]}
         # чувствительность: соседние значения каждого параметра сетки при остальных выбранных
         for name, values in grid.items():
@@ -182,7 +188,7 @@ def run_oos(
                     p = strat.resolve({**chosen, name: axis[j]})
                 except ValueError:
                     continue
-                nev = evaluate(strat, p, df, k, capital, fee_pct, slippage_pct, rules)
+                nev = evaluate(strat, p, df, k, capital, fee_pct, slippage_pct, rules, extra)
                 out["sensitivity"].append({
                     "param": name, "value": axis[j], "train_score": score(nev["_train_raw"]),
                     "train_return_pct": nev["train"]["total_return_pct"],
@@ -192,9 +198,11 @@ def run_oos(
     # чувствительность к расходам: тот же выбранный вариант на проверочном периоде при худшем исполнении
     target = strat.target(df, chosen)
     for mult in COST_MULTIPLIERS:
-        bt = backtest(df, target, capital, fee_pct * mult, slippage_pct * mult, rules, start=k)
+        stress_kw = {**extra, "spread_pct": extra.get("spread_pct", 0.0) * mult}
+        bt = backtest(df, target, capital, fee_pct * mult, slippage_pct * mult, rules, start=k, **stress_kw)
         out["cost_sensitivity"].append({
             "multiplier": mult, "fee_pct": round(fee_pct * mult, 4), "slippage_pct": round(slippage_pct * mult, 4),
+            "spread_pct": round(stress_kw["spread_pct"], 4),
             "return_pct": bt.metrics["total_return_pct"], "trades": bt.metrics["trades"],
         })
 

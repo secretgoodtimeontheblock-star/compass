@@ -42,7 +42,8 @@ from compass.models import (
 )
 from compass.plans import Plan, PlanStore, plan_dto, review
 from compass.replay import ReplayStore
-from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT, WORSE_SLIPPAGE_MULT, position_size
+from compass import execution
+from compass.risk import WORSE_SLIPPAGE_MULT, position_size
 from compass.scheduler import BackgroundScanner
 from compass.settings import Settings
 from compass.signals import (
@@ -131,6 +132,7 @@ class PlanRequest(BaseModel):
     available: float | None = None
     fee_pct: float | None = None
     slippage_pct: float | None = None
+    spread_pct: float | None = None  # по умолчанию — спред профиля рынка
 
 
 class LevelRequest(BaseModel):
@@ -156,6 +158,9 @@ class BacktestRequest(BaseModel):
     capital: float = 100_000.0
     fee_pct: float = 0.05
     slippage_pct: float = 0.05
+    spread_pct: float | None = Field(None, ge=0, lt=100)  # None — спред профиля рынка
+    # предельная доля объёма свечи в заявке: None — размер не ограничивается (доля всё равно считается)
+    max_volume_pct: float | None = Field(None, gt=0, le=100)
     # стопы, цели и размер по риску; всё пусто — прежний режим «весь капитал, выход по сигналу»
     stop_atr_mult: float | None = Field(None, gt=0, le=20)
     target_r: float | None = Field(None, gt=0, le=50)
@@ -183,6 +188,7 @@ class RiskRequest(BaseModel):
     available: float | None = None  # свободные средства; по умолчанию — весь капитал
     fee_pct: float | None = None  # по умолчанию — типичная комиссия рынка
     slippage_pct: float | None = None
+    spread_pct: float | None = None  # по умолчанию — спред профиля рынка
 
 
 def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
@@ -229,6 +235,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "live_supported": _live_for(a.id) is not None,
                 "live_kind": ("stream" if a.id == "crypto" and svc.live is not None else "poll") if _live_for(a.id) is not None else None,
                 "instruments": getattr(a, "catalog_size", lambda: 0)(),
+                "profile": execution.profile(a.id).dto(),
             }
             for a in svc.adapters.values()
         ]
@@ -346,20 +353,31 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "close_eod": rules.close_eod,
         }
 
-    def intraday_block(req, strat, params, df, rules, bt, warnings: list[str]) -> dict:
+    def exec_model(req: BacktestRequest) -> execution.ExecutionModel:
+        """Допущения исполнения запроса: комиссия и проскальзывание как заданы, спред — из профиля рынка."""
+        return execution.model_for(req.market, req.fee_pct, req.slippage_pct, req.spread_pct, req.max_volume_pct)
+
+    def exec_kw(model: execution.ExecutionModel) -> dict:
+        return {"spread_pct": model.spread_pct, "max_participation_pct": model.max_participation_pct}
+
+    def cost_stress(df, target, req, rules, bt, model) -> list[dict]:
+        """Тот же результат при расходах ×1, ×2, ×3 (комиссия, проскальзывание и спред растут вместе)."""
+        stress = []
+        for mult in (1, 2, 3):
+            m = model.worse(mult) if mult > 1 else model
+            r = bt if mult == 1 else backtest(df, target, req.capital, m.fee_pct, m.slippage_pct, rules, **exec_kw(m))
+            stress.append({"multiplier": mult, "fee_pct": round(m.fee_pct, 4), "slippage_pct": round(m.slippage_pct, 4),
+                           "spread_pct": round(m.spread_pct, 4),
+                           "return_pct": r.metrics["total_return_pct"], "trades": r.metrics["trades"]})
+        return stress
+
+    def intraday_block(req, strat, params, df, rules, bt, warnings: list[str], model, stress) -> dict:
         """Скальпинг и внутридневная торговля: расходы решают, история коротка, а МосБиржа отдаёт данные с опозданием."""
         tz = MARKET_TZ.get(req.market)
         off = int(tz.utcoffset(None).total_seconds() * 1000) if tz else 0
         ts = df["ts"].to_numpy().astype("int64")
         days = len(set(((ts + off) // 86_400_000).tolist()))
-        target = strat.target(df, params)
-        cost = 2 * (req.fee_pct + req.slippage_pct)
-        stress = []
-        for mult in (1, 2, 3):
-            r = bt if mult == 1 else backtest(df, target, req.capital, req.fee_pct * mult, req.slippage_pct * mult, rules)
-            stress.append({"multiplier": mult, "fee_pct": round(req.fee_pct * mult, 4),
-                           "slippage_pct": round(req.slippage_pct * mult, 4),
-                           "return_pct": r.metrics["total_return_pct"], "trades": r.metrics["trades"]})
+        cost = model.round_trip_cost_pct
         n = bt.metrics["trades"]
         if days < 20:
             warnings.append(
@@ -390,7 +408,10 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         params = strat.resolve(req.params)
         res, df, open_dropped, quality = load_series(req)
         rules = make_rules(req)
-        bt = backtest(df, strat.target(df, params), req.capital, req.fee_pct, req.slippage_pct, rules)
+        model = exec_model(req)
+        target = strat.target(df, params)
+        bt = backtest(df, target, req.capital, model.fee_pct, model.slippage_pct, rules, **exec_kw(model))
+        stress = cost_stress(df, target, req, rules, bt, model)
         ts = df["ts"].to_numpy()
         eq = np.array([v for _, v in bt.equity])
         metrics, warnings = apply_sample_rules(
@@ -405,7 +426,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         m = bt.metrics
         intraday = None
         if req.tf in INTRADAY_TFS:
-            intraday = intraday_block(req, strat, params, df, rules, bt, warnings)
+            intraday = intraday_block(req, strat, params, df, rules, bt, warnings, model, stress)
         if m.get("ambiguous_bars"):
             warnings.append(
                 f"В {m['ambiguous_bars']} свечах достигнуты и стоп, и цель: порядок внутри свечи неизвестен, "
@@ -413,6 +434,23 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             )
         if m.get("gap_exits"):
             warnings.append(f"Выходов по гэпу: {m['gap_exits']}. Исполнение было хуже уровня стопа.")
+        part = m.get("max_participation_pct")
+        if part and part > execution.LIQUIDITY_WARN_PCT:
+            warnings.append(
+                f"Заявки занимали бы до {part:g}% объёма свечи: на такой размер рынок мог не дать цены свечи, "
+                "реальное исполнение было бы хуже. Уменьшите размер или включите ограничение по объёму."
+            )
+        if m.get("liquidity_capped_entries"):
+            warnings.append(
+                f"Размер входа урезан по объёму свечи {m['liquidity_capped_entries']} раз: "
+                f"допущено не больше {model.max_participation_pct:g}% объёма."
+            )
+        if m.get("illiquid_exits"):
+            warnings.append(f"Выход не уместился в допустимую долю объёма {m['illiquid_exits']} раз: заявку пришлось бы дробить.")
+        if m.get("zero_volume_fills"):
+            warnings.append(
+                f"У {m['zero_volume_fills']} исполнений объём свечи неизвестен (ноль): ликвидность по ним не оценена."
+            )
         if m.get("skipped_entries"):
             warnings.append(
                 f"Вход по сигналу пропущен {m['skipped_entries']} раз: открытие уже ниже стопа, "
@@ -426,6 +464,14 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "data_quality": quality,
             "warnings": warnings,
             "intraday": intraday,
+            "execution": {
+                "model": {"fee_pct": model.fee_pct, "slippage_pct": model.slippage_pct, "spread_pct": model.spread_pct,
+                          "max_participation_pct": model.max_participation_pct,
+                          "round_trip_cost_pct": round(model.round_trip_cost_pct, 4)},
+                "cost_stress": stress,
+                "story": execution.cost_story(stress[0]["return_pct"], stress[-1]["return_pct"], model),
+                "max_participation_pct": m.get("max_participation_pct"),
+            },
             "coverage": {
                 "requested": req.limit,
                 "candles": len(df),
@@ -451,6 +497,8 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 stale=res.stale,
                 strategy_version=strategy_version(strat, params),
                 rules=rules_dict(rules),
+                spread_pct=model.spread_pct,
+                max_participation_pct=model.max_participation_pct,
             ),
             "trades": [asdict(t) for t in bt.trades],
             "equity": [{"t": t, "v": round(v, 2)} for t, v in bt.equity],
@@ -472,6 +520,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 strategy_version=card.get("strategy_version"), params=params,
                 config={
                     "capital": req.capital, "fee_pct": req.fee_pct, "slippage_pct": req.slippage_pct,
+                    "spread_pct": card.get("spread_pct"), "max_participation_pct": card.get("max_participation_pct"),
                     "limit": req.limit, "rules": card.get("rules"), **(extra_config or {}),
                 },
                 data_hash=card["data_hash"], engine_version=card["engine_version"], candles=card["candles"],
@@ -495,12 +544,16 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         base = strat.resolve(req.params)
         res, df, open_dropped, quality = load_series(req, min_candles=oos.MIN_TRAIN_CANDLES + oos.MIN_TEST_CANDLES)
         rules = make_rules(req)
-        result = oos.run_oos(strat, base, req.grid, df, req.train_pct, req.capital, req.fee_pct, req.slippage_pct, rules)
+        model = exec_model(req)
+        result = oos.run_oos(
+            strat, base, req.grid, df, req.train_pct, req.capital, req.fee_pct, req.slippage_pct, rules, exec_kw(model)
+        )
         chosen = (result["chosen"] or {}).get("params", base)
         card = run_card(
             df, market=req.market, symbol=req.symbol, tf=req.tf, strategy=strat.id, params=chosen, capital=req.capital,
             fee_pct=req.fee_pct, slippage_pct=req.slippage_pct, stale=res.stale,
             strategy_version=strategy_version(strat, chosen), rules=rules_dict(rules),
+            spread_pct=model.spread_pct, max_participation_pct=model.max_participation_pct,
         )
         variants = result["optimization"]["variants"]
         summary = {
@@ -691,8 +744,9 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         available = req.available
         if available is None and snap["free"] is not None:
             available = max(0.0, snap["free"])  # свободные средства с учётом открытых позиций и результата
-        fee = req.fee_pct if req.fee_pct is not None else DEFAULT_FEE_PCT.get(req.market, 0.1)
-        slip = req.slippage_pct if req.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
+        model = execution.model_for(req.market, req.fee_pct, req.slippage_pct, req.spread_pct)
+        fee = model.fee_pct
+        slip = model.effective_slippage_pct  # проскальзывание + половина спреда: как в бэктесте и на учебном счёте
         bond = info.price_unit == "percent_of_face"
         if bond and not info.face_value:
             raise ValueError("Для облигации не получен номинал: посчитать размер позиции нельзя")
@@ -750,12 +804,15 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             "unit_value": info.face_value / 100 if bond and info.face_value else 1.0,
             "fee_pct": fee,
             "slippage_pct": slip,
+            "slippage_input_pct": model.slippage_pct,
+            "spread_pct": model.spread_pct,
             "warnings": warnings,
             "assumptions": [
                 "Потеря при стопе — расчётный сценарий, а не гарантированный максимум: цена может пройти стоп гэпом.",
                 (
                     f"Считается вход и выход по стопу с комиссией {fee:g}% и проскальзыванием {slip:g}% "
-                    f"с каждой стороны; ухудшенное исполнение — проскальзывание ×{WORSE_SLIPPAGE_MULT:g}."
+                    f"с каждой стороны (проскальзывание {model.slippage_pct:g}% + половина спреда "
+                    f"{model.spread_pct:g}%); ухудшенное исполнение — проскальзывание ×{WORSE_SLIPPAGE_MULT:g}."
                 ),
                 "Приложение ничего не исполняет и не блокирует: лимит — предупреждение.",
             ],

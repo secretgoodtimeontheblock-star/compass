@@ -33,7 +33,7 @@ def start(env: Env, script, *, replay_bars: int | None = None, capital: float = 
     c = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     r = c.post("/api/replay", json={"market": "moex", "symbol": symbol, "tf": "1d",
                                     "replay_bars": replay_bars or len(data) - WARMUP, "capital": capital,
-                                    "fee_pct": fee, "slippage_pct": slip, **kw})
+                                    "fee_pct": fee, "slippage_pct": slip, "spread_pct": 0, **kw})
     assert r.status_code == 201, r.text
     return c, r.json()
 

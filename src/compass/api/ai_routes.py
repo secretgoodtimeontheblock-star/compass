@@ -13,10 +13,10 @@ from pydantic import BaseModel, Field
 from compass.ai import prompts
 from compass.ai.providers import AiError, AiNotReady
 from compass.ai.service import AiResult
+from compass import execution
 from compass.backtest import backtest
 from compass.markets.base import MarketError
 from compass.models import closed_candles
-from compass.risk import DEFAULT_FEE_PCT, DEFAULT_SLIPPAGE_PCT
 from compass.strategies import STRATEGIES, candles_to_df
 
 if TYPE_CHECKING:
@@ -88,8 +88,10 @@ def register_ai_routes(app: FastAPI, svc: Services) -> None:
             snapshot = prompts.snapshot_facts(candles[-300:], sig.tf, sig.market)
             if len(candles) >= 30:
                 df = candles_to_df(candles)
+                model = execution.model_for(sig.market)
                 metrics = backtest(
-                    df, strat.target(df, params), 100_000.0, DEFAULT_FEE_PCT.get(sig.market, 0.1), DEFAULT_SLIPPAGE_PCT
+                    df, strat.target(df, params), 100_000.0, model.fee_pct, model.slippage_pct,
+                    spread_pct=model.spread_pct,
                 ).metrics
         except (MarketError, ValueError):
             warning = prompts.UNAVAILABLE_WARNING
