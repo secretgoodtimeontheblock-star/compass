@@ -1,0 +1,273 @@
+{
+  "audit": {
+    "ranAt": "2026-09-30T20:06:03.729928+00:00",
+    "skill": "ui-design",
+    "mode": "audit",
+    "scope": {
+      "mode": "explicit",
+      "diffBase": "working-tree",
+      "files": [
+        "ui/src/App.tsx",
+        "ui/src/components/BacktestPanel.tsx",
+        "ui/src/components/ChartExtras.tsx",
+        "ui/src/components/CommandPalette.tsx",
+        "ui/src/components/ErrorBoundary.tsx",
+        "ui/src/components/GettingStarted.tsx",
+        "ui/src/components/JournalPanel.tsx",
+        "ui/src/components/Modal.tsx",
+        "ui/src/components/OosPanel.tsx",
+        "ui/src/components/PersistentTab.tsx",
+        "ui/src/components/PriceChart.tsx",
+        "ui/src/components/RequestStatus.tsx",
+        "ui/src/components/ScreenerDialog.tsx",
+        "ui/src/components/SearchBox.tsx",
+        "ui/src/lib/use-api.ts",
+        "ui/src/lib/use-drawer.ts",
+        "ui/src/lib/use-scoped-state.ts",
+        "ui/src/main.tsx",
+        "ui/src/styles.css"
+      ],
+      "filesAudited": 19
+    },
+    "featuresDetected": [
+      "dashboard",
+      "modal",
+      "form",
+      "search",
+      "loading state",
+      "error state"
+    ],
+    "rulesPlanned": 8,
+    "rulesRun": 8,
+    "selfCheck": {
+      "passed": true,
+      "failures": []
+    }
+  },
+  "verdict": "READY",
+  "summary": {
+    "found": {
+      "releaseBlockers": 5,
+      "fixThisSprint": 4,
+      "backlog": 0,
+      "total": 9
+    },
+    "applied": {
+      "releaseBlockers": 5,
+      "fixThisSprint": 4,
+      "backlog": 0,
+      "total": 9
+    },
+    "remaining": {
+      "releaseBlockers": 0,
+      "fixThisSprint": 0,
+      "backlog": 0,
+      "total": 0
+    },
+    "outOfScope": 0,
+    "unknown": 0,
+    "suppressed": 0
+  },
+  "consideredAndRejected": [
+    {
+      "candidate": "Небольшие кнопки на десктопе",
+      "rule": "interaction-target-size",
+      "guard": "Плотный интерфейс под мышь допустим; сенсорные размеры отдельно исправлены."
+    },
+    {
+      "candidate": "Кнопки изменения темы и настроек",
+      "rule": "a11y-icon-controls-labeled",
+      "guard": "Изначально имеют aria-label; исправления потребовались другим кнопкам с исчезающей подписью."
+    },
+    {
+      "candidate": "Откат оптимистичного добавления в избранное",
+      "rule": "states-no-error-state",
+      "guard": "Мутация ожидает успешный ответ API, при отказе показывается сообщение; ложного успешного добавления нет."
+    }
+  ],
+  "deferredTo": [
+    {
+      "concern": "Полная WCAG-проверка",
+      "tool": "axe-core / screen reader",
+      "reason": "Этот проход проверял названные сценарии, а не сертификацию доступности."
+    },
+    {
+      "concern": "Измерение производительности",
+      "tool": "Lighthouse",
+      "reason": "Измерен размер сборки, но не проводились нагрузочные тесты и профилирование кадров."
+    }
+  ],
+  "findings": [
+    {
+      "rule": "focus-not-restored",
+      "category": "focus",
+      "detect": "static",
+      "feature": "modal",
+      "surface": "Modal",
+      "file": "ui/src/components/Modal.tsx",
+      "line": 33,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "release-blocker",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "HIGH",
+      "observed": "После закрытия настроек фокус уходил в BODY.",
+      "fix": "Сохранён и восстановлен элемент открытия, добавлен запасной фокус для перехода из палитры.",
+      "applied": true,
+      "appliedChange": "ui/src/components/Modal.tsx:33: Сохранён и восстановлен элемент открытия, добавлен запасной фокус для перехода из палитры.",
+      "suppressed": false
+    },
+    {
+      "rule": "focus-broken-focus-trap",
+      "category": "focus",
+      "detect": "static",
+      "feature": "modal",
+      "surface": "App",
+      "file": "ui/src/App.tsx",
+      "line": 510,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "release-blocker",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "HIGH",
+      "observed": "Выдвижная панель оставляла фон доступным для клавиатуры.",
+      "fix": "FocusScope, inert для фона, Escape и возврат фокуса; вложенные диалоги не закрывают панель.",
+      "applied": true,
+      "appliedChange": "ui/src/App.tsx:510: FocusScope, inert для фона, Escape и возврат фокуса; вложенные диалоги не закрывают панель.",
+      "suppressed": false
+    },
+    {
+      "rule": "forms-lost-data-on-error",
+      "category": "forms",
+      "detect": "static",
+      "feature": "form",
+      "surface": "JournalPanel",
+      "file": "ui/src/components/JournalPanel.tsx",
+      "line": 27,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "release-blocker",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "HIGH",
+      "observed": "Вкладки размонтировали формы; поля журнала переносились на другой тикер.",
+      "fix": "Посещённые вкладки сохраняются. Черновики разделены по рынку, тикеру и режиму журнала.",
+      "applied": true,
+      "appliedChange": "ui/src/components/JournalPanel.tsx:27: Посещённые вкладки сохраняются. Черновики разделены по рынку, тикеру и режиму журнала.",
+      "suppressed": false
+    },
+    {
+      "rule": "async-out-of-order-responses",
+      "category": "async",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "BacktestPanel",
+      "file": "ui/src/components/BacktestPanel.tsx",
+      "line": 68,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "release-blocker",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "HIGH",
+      "observed": "Запоздавший расчёт мог показать результат предыдущей стратегии.",
+      "fix": "Поколения запросов инвалидируются при изменении входных данных; аналогично защищён OosPanel.",
+      "applied": true,
+      "appliedChange": "ui/src/components/BacktestPanel.tsx:68: Поколения запросов инвалидируются при изменении входных данных; аналогично защищён OosPanel.",
+      "suppressed": false
+    },
+    {
+      "rule": "async-out-of-order-responses",
+      "category": "async",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "useApi",
+      "file": "ui/src/lib/use-api.ts",
+      "line": 21,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "fix-this-sprint",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "MEDIUM",
+      "observed": "Ошибка предыдущего инструмента оставалась после выбора нового.",
+      "fix": "Ошибки, как и данные, привязаны к зависимостям запроса; поиск очищает устаревшие варианты.",
+      "applied": true,
+      "appliedChange": "ui/src/lib/use-api.ts:21: Ошибки, как и данные, привязаны к зависимостям запроса; поиск очищает устаревшие варианты.",
+      "suppressed": false
+    },
+    {
+      "rule": "a11y-icon-controls-labeled",
+      "category": "a11y",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "App",
+      "file": "ui/src/App.tsx",
+      "line": 341,
+      "result": "fail",
+      "defaultTier": "fix-this-sprint",
+      "assignedTier": "fix-this-sprint",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "MEDIUM",
+      "observed": "На узком экране скрытая подпись оставляла несколько кнопок без доступного имени.",
+      "fix": "Постоянные aria-label и title; все вкладки панели имеют видимые подписи.",
+      "applied": true,
+      "appliedChange": "ui/src/App.tsx:341: Постоянные aria-label и title; все вкладки панели имеют видимые подписи.",
+      "suppressed": false
+    },
+    {
+      "rule": "states-no-error-state",
+      "category": "states",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "RequestStatus",
+      "file": "ui/src/components/RequestStatus.tsx",
+      "line": 3,
+      "result": "fail",
+      "defaultTier": "fix-this-sprint",
+      "assignedTier": "fix-this-sprint",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "MEDIUM",
+      "observed": "Ошибки списка избранного и панелей выглядели как пустые данные.",
+      "fix": "Локальные сообщения об ошибке и кнопки повторного запроса; настройки показывают состояние загрузки.",
+      "applied": true,
+      "appliedChange": "ui/src/components/RequestStatus.tsx:3: Локальные сообщения об ошибке и кнопки повторного запроса; настройки показывают состояние загрузки.",
+      "suppressed": false
+    },
+    {
+      "rule": "async-no-error-boundary",
+      "category": "async",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "ErrorBoundary",
+      "file": "ui/src/components/ErrorBoundary.tsx",
+      "line": 3,
+      "result": "fail",
+      "defaultTier": "release-blocker",
+      "assignedTier": "release-blocker",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "HIGH",
+      "observed": "Ошибка рендера могла убрать всё приложение.",
+      "fix": "Добавлены границы ошибок приложения и отдельных вкладок с действием повторного открытия.",
+      "applied": true,
+      "appliedChange": "ui/src/components/ErrorBoundary.tsx:3: Добавлены границы ошибок приложения и отдельных вкладок с действием повторного открытия.",
+      "suppressed": false
+    },
+    {
+      "rule": "interaction-target-size",
+      "category": "interaction",
+      "detect": "static",
+      "feature": "dashboard",
+      "surface": "App",
+      "file": "ui/src/styles.css",
+      "line": 1892,
+      "result": "fail",
+      "defaultTier": "fix-this-sprint",
+      "assignedTier": "fix-this-sprint",
+      "tierReason": "Критичность оценена для локального аналитического приложения.",
+      "severity": "MEDIUM",
+      "observed": "Поздние CSS-правила уменьшали области нажатия на сенсорных экранах.",
+      "fix": "Контролы, поля и команды получают минимум 44 px на узких/сенсорных экранах.",
+      "applied": true,
+      "appliedChange": "ui/src/styles.css:1892: Контролы, поля и команды получают минимум 44 px на узких/сенсорных экранах.",
+      "suppressed": false
+    }
+  ]
+}

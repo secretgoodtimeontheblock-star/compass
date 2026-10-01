@@ -100,11 +100,14 @@ class MoexAdapter:
                             high=float(row[idx["high"]]),
                             low=float(row[idx["low"]]),
                             close=float(row[idx["close"]]),
-                            volume=float(row[idx["volume"]]),
+                            # ISS может отдавать цены без объёма (например, валюты).
+                            # В числовом ряде это 0; check_candles явно предупреждает,
+                            # что нулевой/непереданный объём не доказывает редкие торги.
+                            volume=0.0 if row[idx["volume"]] is None else float(row[idx["volume"]]),
                         )
                     )
                 except (KeyError, TypeError, ValueError) as e:
-                    raise MarketError(f"Неожиданный формат свечи МосБиржи: {e}") from e
+                    raise MarketError("МосБиржа вернула неполные или некорректные данные свечей. Попробуйте другой период или повторите запрос позже.") from e
             if len(rows) < PAGE:
                 break
             offset += len(rows)

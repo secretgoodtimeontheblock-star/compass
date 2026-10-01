@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import * as Tabs from "@radix-ui/react-tabs";
+import { FocusScope } from "@radix-ui/react-focus-scope";
+import { PersistentTab } from "./components/PersistentTab";
+import { useDrawer } from "./lib/use-drawer";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy } from "react";
+import { Toaster, toast } from "sonner";
+import { RequestStatus } from "./components/RequestStatus";
+import { Modal } from "./components/Modal";
 import { api } from "./api";
-import { AiPanel } from "./components/AiPanel";
-import { BacktestPanel } from "./components/BacktestPanel";
+import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
 import { ConsentDialog } from "./components/ConsentDialog";
 import { DataStatus } from "./components/DataStatus";
 import { GettingStarted } from "./components/GettingStarted";
 import { Icon } from "./components/Icon";
-import { JournalPanel } from "./components/JournalPanel";
-import { ReplayPanel } from "./components/ReplayPanel";
 import { ScreenerDialog } from "./components/ScreenerDialog";
 import { ChartExtras } from "./components/ChartExtras";
 import { type ChartLine, type Overlays, PriceChart } from "./components/PriceChart";
 import { SearchBox } from "./components/SearchBox";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SignalsPanel } from "./components/SignalsPanel";
+import { Tip, TipProvider } from "./components/Tip";
 import { Watchlist } from "./components/Watchlist";
 import { AiContext } from "./lib/ai-context";
 import { fmtPct, fmtPrice, pnlClass } from "./lib/format";
@@ -23,15 +28,21 @@ import { hasGap, mergeLiveHistory } from "./lib/live-candles";
 import { TF_MS } from "./lib/indicators";
 import type { AiStatus, Instrument, JournalDraft, JournalMode, MarketId, Settings, Signal } from "./types";
 
-type Tab = "signals" | "backtest" | "journal" | "replay" | "ai";
-type Toast = { id: number; title: string; text: string };
+const AiPanel = lazy(() => import("./components/AiPanel").then((m) => ({ default: m.AiPanel })));
 
+const BacktestPanel = lazy(() => import("./components/BacktestPanel").then((m) => ({ default: m.BacktestPanel })));
+
+const JournalPanel = lazy(() => import("./components/JournalPanel").then((m) => ({ default: m.JournalPanel })));
+
+const ReplayPanel = lazy(() => import("./components/ReplayPanel").then((m) => ({ default: m.ReplayPanel })));
+
+type Tab = "signals" | "backtest" | "journal" | "replay" | "ai";
 const TABS = [
-  ["signals", "Сигналы"],
-  ["backtest", "Проверка"],
-  ["journal", "Журнал"],
-  ["replay", "Тренировка"],
-  ["ai", "AI"],
+  ["signals", "Сигналы", "signals"],
+  ["backtest", "Проверка", "backtest"],
+  ["journal", "Журнал", "journal"],
+  ["replay", "Тренировка", "replay"],
+  ["ai", "AI", "ai"],
 ] as const;
 
 const MARKET_LABEL: Record<MarketId, string> = { moex: "Акции МосБиржи", crypto: "Крипта" };
@@ -49,6 +60,7 @@ export default function App() {
   const [journalDraft, setJournalDraft] = useState<JournalDraft | null>(null);
   const [theme, setTheme] = useState(loadPref("theme") === "light" ? "light" : "dark");
   const [market, setMarket] = useState<MarketId>(loadPref("market") === "crypto" ? "crypto" : "moex");
+  const [preview, setPreview] = useState<Instrument>();
   const [selSymbol, setSelSymbol] = useState<Record<string, string>>(() => readJson("selected", {}));
   const [tfOverride, setTfOverride] = useState<Record<string, string>>({});
   const [overlays, setOverlays] = useState<Overlays>(() =>
@@ -59,7 +71,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(loadPref("guide-dismissed") !== "yes");
   const [screenerOpen, setScreenerOpen] = useState(false);
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [settingsOverride, setSettingsOverride] = useState<Settings>();
 
@@ -73,34 +85,23 @@ export default function App() {
   useEffect(() => savePref("selected", JSON.stringify(selSymbol)), [selSymbol]);
   useEffect(() => savePref("overlays", JSON.stringify(overlays)), [overlays]);
 
-  const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const pushToast = useCallback((title: string, text: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-3), { id, title, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
+    toast(title, { description: text, duration: 7000 });
   }, []);
 
-  // Esc закрывает выдвижную панель (диалоги перехватывают Esc раньше)
+  const drawer = useDrawer(rightOpen, () => setRightOpen(false));
+
+  // Ctrl/⌘ + K — палитра команд
   useEffect(() => {
-    if (!rightOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setRightOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [rightOpen]);
-
-  const onTabKey = (e: React.KeyboardEvent) => {
-    const i = TABS.findIndex(([k]) => k === tab);
-    const next =
-      e.key === "ArrowRight" ? (i + 1) % TABS.length
-      : e.key === "ArrowLeft" ? (i - 1 + TABS.length) % TABS.length
-      : e.key === "Home" ? 0
-      : e.key === "End" ? TABS.length - 1
-      : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    setTab(TABS[next][0]);
-    document.getElementById(`tab-${TABS[next][0]}`)?.focus();
-  };
+  }, []);
 
   // ---- данные ----
   const marketsApi = useApi(() => api.markets(), []);
@@ -136,8 +137,8 @@ export default function App() {
     else cur.add(key);
     try {
       setSettingsOverride(await api.saveSettings({ paused_instruments: [...cur] }));
-    } catch {
-      // ошибка сохранения не должна ломать список; состояние останется прежним
+    } catch (e) {
+      pushToast("Не удалось изменить наблюдение", e instanceof Error ? e.message : "Повторите попытку");
     }
   };
   const marketInfo = markets.find((m) => m.id === market);
@@ -145,8 +146,8 @@ export default function App() {
 
   const selected: Instrument | undefined = useMemo(() => {
     const want = selSymbol[market];
-    return items.find((i) => i.symbol === want) ?? items[0];
-  }, [items, selSymbol, market]);
+    return items.find((i) => i.symbol === want) ?? (preview?.market === market && preview.symbol === want ? preview : items[0]);
+  }, [items, selSymbol, market, preview]);
 
   const defaultTf = settings ? settings[market === "moex" ? "tf_moex" : "tf_crypto"] : "1d";
   const tf = tfOverride[market] && marketInfo?.timeframes.includes(tfOverride[market]) ? tfOverride[market] : defaultTf;
@@ -156,7 +157,7 @@ export default function App() {
     [selected?.market, selected?.symbol, tf],
     60_000,
   );
-  const live = useLiveCandles(selected?.symbol, tf, market === "crypto" && !!marketInfo?.live_supported);
+  const live = useLiveCandles(market, selected?.symbol, tf, !!marketInfo?.live_supported, marketInfo?.live_kind === "poll");
   // Обычный REST-опрос тоже может восстановить историю, пока поток остаётся подключён.
   const streamedHistory = live.feed?.history;
   const history = streamedHistory && (!candlesApi.data || (streamedHistory.fetched_at ?? 0) > (candlesApi.data.fetched_at ?? 0))
@@ -212,6 +213,7 @@ export default function App() {
 
   // ---- действия ----
   const selectInstrument = (i: Instrument) => {
+    setPreview(i);
     setMarket(i.market);
     setSelSymbol((m) => ({ ...m, [i.market]: i.symbol }));
   };
@@ -229,6 +231,8 @@ export default function App() {
   const removeFromWatch = async (i: Instrument) => {
     try {
       await api.removeWatch(i);
+      if (preview?.market === i.market && preview.symbol === i.symbol) setPreview(undefined);
+      setSelSymbol((old) => ({ ...old, [i.market]: old[i.market] === i.symbol ? "" : old[i.market] }));
       watchApi.reload();
     } catch (e) {
       pushToast("Не удалось убрать", e instanceof Error ? e.message : "Ошибка");
@@ -236,6 +240,7 @@ export default function App() {
   };
 
   const scan = async () => {
+    if (scanBusy) return;
     setScanBusy(true);
     try {
       const r = await api.scan();
@@ -262,6 +267,30 @@ export default function App() {
     signalsApi.reload();
   };
 
+  const openTab = (t: Tab) => {
+    setTab(t);
+    setRightOpen(true);
+  };
+  const paletteActions: PaletteAction[] = [
+    { id: "scan", label: "Проверить сигналы", icon: "scan", run: () => void scan() },
+    { id: "signals", label: "Открыть сигналы", icon: "signals", run: () => openTab("signals") },
+    { id: "backtest", label: "Проверить стратегию на истории", icon: "backtest", run: () => openTab("backtest") },
+    { id: "replay", label: "Тренироваться без реальных денег", icon: "replay", run: () => openTab("replay") },
+    { id: "screener", label: "Открыть скринер избранного", icon: "chart", run: () => setScreenerOpen(true) },
+    { id: "journal", label: "Открыть журнал сделок", icon: "journal", run: () => openTab("journal") },
+    { id: "ai", label: "Спросить AI-наставника", icon: "ai", run: () => openTab("ai") },
+    { id: "moex", label: "Рынок: акции МосБиржи", icon: "chart", run: () => setMarket("moex") },
+    { id: "crypto", label: "Рынок: крипта", icon: "chart", run: () => setMarket("crypto") },
+    {
+      id: "theme",
+      label: theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему",
+      icon: theme === "dark" ? "sun" : "moon",
+      run: () => setTheme(theme === "dark" ? "light" : "dark"),
+    },
+    { id: "guide", label: guideOpen ? "Скрыть «С чего начать»" : "Показать «С чего начать»", icon: "help", run: () => setGuideOpen((v) => !v) },
+    { id: "settings", label: "Настройки", icon: "settings", run: () => setSettingsOpen(true) },
+  ];
+
   if (marketsApi.error && !marketsApi.data) {
     return (
       <div className="fatal" role="alert">
@@ -283,15 +312,22 @@ export default function App() {
 
   return (
     <AiContext.Provider value={aiCtx}>
+    <TipProvider delayDuration={350}>
     <div className="app">
       <a className="skip-link" href="#chart">К графику</a>
       <header className="topbar">
         <div className="brand">
           <svg viewBox="0 0 32 32" aria-hidden="true">
-            <circle cx="16" cy="16" r="14" fill="var(--accent)" />
+            <defs>
+              <linearGradient id="brand-g" x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#6ea0ff" />
+                <stop offset="1" stopColor="#7c5cff" />
+              </linearGradient>
+            </defs>
+            <circle cx="16" cy="16" r="14" fill="url(#brand-g)" />
             <path d="M16 6l4 10-4 10-4-10z" fill="#fff" />
           </svg>
-          Compass
+          <span className="brand-name">Compass</span>
         </div>
         <div className="seg" role="group" aria-label="Рынок">
           {(Object.keys(MARKET_LABEL) as MarketId[]).map((m) => (
@@ -302,26 +338,36 @@ export default function App() {
         </div>
         <SearchBox market={market} catalogSize={marketInfo?.instruments} onPick={addToWatch} />
         <div className="spacer" />
-        <button className="btn" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>
+        <button className="btn" aria-label="С чего начать" title="С чего начать" aria-expanded={guideOpen} onClick={() => setGuideOpen((v) => !v)}>
           <Icon name="help" /> <span className="btn-label">С чего начать</span>
         </button>
-        <button className="btn primary" onClick={scan} disabled={scanBusy || items.length === 0 && (watchApi.data ?? []).length === 0}>
+        <button className="btn primary" aria-label={scanBusy ? "Проверяем сигналы" : "Проверить сигналы"} title="Проверить сигналы" onClick={scan} disabled={scanBusy || items.length === 0 && (watchApi.data ?? []).length === 0}>
           <span className={scanBusy ? "spin" : undefined}><Icon name="scan" /></span>
           <span className="btn-label">{scanBusy ? "Проверяем…" : "Проверить сигналы"}</span>
         </button>
-        <button className="btn panel-toggle" onClick={() => setRightOpen((o) => !o)} aria-expanded={rightOpen} aria-controls="right-panel">
+        <button className="btn panel-toggle" aria-label="Открыть панель анализа" title="Панель анализа" onClick={() => setRightOpen((o) => !o)} aria-expanded={rightOpen} aria-controls="right-panel">
           <Icon name="panel" /> <span className="btn-label">Панель</span> {unseen.length > 0 && <span className="badge" aria-label={`${unseen.length} непрочитанных`}>{unseen.length}</span>}
         </button>
-        <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"} title="Сменить тему">
-          <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
-        </button>
-        <button className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Настройки" title="Настройки">
-          <Icon name="settings" size={18} />
-        </button>
+        <Tip label="Команды (Ctrl K)">
+          <button className="icon-btn" onClick={() => setPaletteOpen(true)} aria-label="Открыть палитру команд">
+            <Icon name="command" size={18} />
+          </button>
+        </Tip>
+        <Tip label={theme === "dark" ? "Светлая тема" : "Тёмная тема"}>
+          <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"}>
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
+          </button>
+        </Tip>
+        <Tip label="Настройки">
+          <button className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Настройки">
+            <Icon name="settings" size={18} />
+          </button>
+        </Tip>
       </header>
 
       <div className="main">
         <aside className="side" aria-label="Избранное">
+          <RequestStatus state={watchApi} label="Не удалось загрузить избранное" />
           <Watchlist
             market={market}
             items={items}
@@ -336,26 +382,29 @@ export default function App() {
         </aside>
 
         <main className="center">
-          {guideOpen && (
+            {guideOpen && (
+              <div style={{ overflow: "hidden", flexShrink: 0 }}>
             <GettingStarted
-              selected={selected}
-              onPick={async (i) => {
-                await api.addWatch(i);
-                watchApi.reload();
-                selectInstrument(i);
-              }}
-              onBacktest={() => { setTab("backtest"); setRightOpen(true); }}
-              onLearn={() => { setTab("ai"); setRightOpen(true); }}
-              onClose={() => { setGuideOpen(false); savePref("guide-dismissed", "yes"); }}
-            />
-          )}
+                  selected={selected}
+                  onPick={async (i) => {
+                    await api.addWatch(i);
+                    watchApi.reload();
+                    selectInstrument(i);
+                  }}
+                  onBacktest={() => { setTab("backtest"); setRightOpen(true); }}
+                  onLearn={() => { setTab("ai"); setRightOpen(true); }}
+                  onTrain={() => { setTab("replay"); setRightOpen(true); }}
+                  onClose={() => { setGuideOpen(false); savePref("guide-dismissed", "yes"); }}
+                />
+              </div>
+            )}
           <div className="chart-head">
             {selected ? (
               <>
                 <span className="title">{selected.symbol}</span>
                 {selected.name !== selected.symbol && <span className="muted">{selected.name}</span>}
                 {last && <span className="price num">{fmtPrice(last.c)}</span>}
-                {change !== undefined && <span className={`num ${pnlClass(change)}`}>{fmtPct(change)}</span>}
+                {change !== undefined && <span className={`change-pill num ${pnlClass(change)}`}>{fmtPct(change)}</span>}
               </>
             ) : (
               <span className="muted">{MARKET_LABEL[market]}</span>
@@ -396,6 +445,13 @@ export default function App() {
           />
           <div className="chart-wrap" id="chart" tabIndex={-1}>
             {candlesApi.loading && <div className="loading-bar" />}
+            {candlesApi.loading && candles.length === 0 && !candlesApi.error && selected && (
+              <div className="chart-skeleton" aria-hidden="true">
+                {Array.from({ length: 28 }, (_, i) => (
+                  <span key={i} style={{ height: `${28 + ((i * 37) % 46)}%` }} />
+                ))}
+              </div>
+            )}
             {selected ? (
               <PriceChart
                 candles={candles}
@@ -409,9 +465,13 @@ export default function App() {
               />
             ) : (
               <div className="chart-empty">
-                <div>
+                <div className="empty-hero">
+                  <span className="empty-hero-icon"><Icon name="chart" size={26} /></span>
                   <b>Выберите тикер</b>
                   <p>Найдите акцию или криптопару через поиск сверху либо добавьте популярный тикер слева.</p>
+                  <button className="btn" onClick={() => setPaletteOpen(true)}>
+                    <Icon name="command" size={14} /> Открыть палитру команд
+                  </button>
                 </div>
               </div>
             )}
@@ -432,9 +492,18 @@ export default function App() {
                 </div>
               </div>
             )}
+            {selected && !candlesApi.loading && !candlesApi.error && candles.length === 0 && candlesApi.data && (
+              <div className="chart-empty">
+                <div>
+                  <b>Нет свечей за выбранный период</b>
+                  <p>Источник не вернул историю {selected.symbol}. Попробуйте другой таймфрейм или выберите инструмент через поиск.</p>
+                  <button className="btn" onClick={candlesApi.reload}>Проверить снова</button>
+                </div>
+              </div>
+            )}
           </div>
           {selected && (
-            <ChartExtras
+            <ChartExtras key={`${selected.market}:${selected.symbol}`}
               instrument={selected}
               marketInfo={marketInfo}
               tf={tf}
@@ -447,29 +516,25 @@ export default function App() {
         </main>
 
         {rightOpen && <div className="scrim" onClick={() => setRightOpen(false)} aria-hidden="true" />}
-        <aside id="right-panel" className={`right${rightOpen ? " open" : ""}`} aria-label="Сигналы, проверка стратегий, журнал">
-          <div className="tabs-row">
-            <div className="tabs" role="tablist" aria-label="Разделы панели" onKeyDown={onTabKey}>
-              {TABS.map(([k, label]) => (
-                <button
-                  key={k}
-                  id={`tab-${k}`}
-                  role="tab"
-                  aria-selected={tab === k}
-                  aria-controls={`panel-${k}`}
-                  tabIndex={tab === k ? 0 : -1}
-                  onClick={() => setTab(k)}
-                >
-                  {label} {k === "signals" && unseen.length > 0 && <span className="badge">{unseen.length}</span>}
-                </button>
-              ))}
+        <FocusScope asChild trapped={drawer.active} loop={drawer.active} onMountAutoFocus={(e) => e.preventDefault()} onUnmountAutoFocus={(e) => e.preventDefault()}>
+        <aside ref={drawer.panel} role={drawer.active ? "dialog" : undefined} aria-modal={drawer.active || undefined} id="right-panel" className={`right${rightOpen ? " open" : ""}`} aria-label="Сигналы, проверка стратегий, журнал">
+          <Tabs.Root className="tabs-root" value={tab} onValueChange={(v) => setTab(v as Tab)}>
+            <div className="tabs-row">
+              <Tabs.List className="tabs" aria-label="Разделы панели">
+                {TABS.map(([k, label, icon]) => (
+                  <Tabs.Trigger key={k} value={k} title={label} aria-label={k === "signals" && unseen.length > 0 ? `${label}, непрочитанных: ${unseen.length}` : label}>
+                    <Icon name={icon} size={15} />
+                    <span className="tab-label">{label}</span>
+                    {k === "signals" && unseen.length > 0 && <span className="badge">{unseen.length}</span>}
+                  </Tabs.Trigger>
+                ))}
+              </Tabs.List>
+              <button className="icon-btn drawer-close" onClick={() => setRightOpen(false)} aria-label="Закрыть панель">
+                <Icon name="close" size={18} />
+              </button>
             </div>
-            <button className="icon-btn drawer-close" onClick={() => setRightOpen(false)} aria-label="Закрыть панель">
-              <Icon name="close" size={18} />
-            </button>
-          </div>
-          <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-          {tab === "signals" && (
+            <PersistentTab value="signals" active={tab}>
+            <RequestStatus state={signalsApi} label="Не удалось обновить сигналы" />
             <SignalsPanel
               signals={allSignals}
               selected={selected}
@@ -484,18 +549,20 @@ export default function App() {
                 setRightOpen(true);
               }}
             />
-          )}
-          {tab === "backtest" && (
-            <BacktestPanel
+            </PersistentTab>
+            <PersistentTab value="backtest" active={tab}>
+            <RequestStatus state={strategiesApi} label="Не удалось загрузить стратегии" />
+            <BacktestPanel key={`${selected?.market}:${selected?.symbol}:${tf}`}
               instrument={selected}
               tf={tf}
               strategies={strategiesApi.data ?? []}
               settings={settings}
               theme={theme}
-              onStrategiesSaved={() => settingsApi.reload()}
+              onStrategiesSaved={() => { setSettingsOverride(undefined); settingsApi.reload(); }}
             />
-          )}
-          {tab === "journal" && (
+            </PersistentTab>
+            <PersistentTab value="journal" active={tab}>
+            <RequestStatus state={journalApi} label="Не удалось загрузить журнал" />
             <JournalPanel
               instrument={selected}
               entries={journalApi.data ?? []}
@@ -508,6 +575,7 @@ export default function App() {
                 positionsApi.reload();
               }}
               onSelect={selectInstrument}
+              onDraftConsumed={() => setJournalDraft(null)}
               draft={
                 journalDraft &&
                 selected &&
@@ -517,11 +585,16 @@ export default function App() {
                   : null
               }
             />
-          )}
-          {tab === "replay" && <ReplayPanel instrument={selected} tf={tf} theme={theme} />}
-          {tab === "ai" && <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />}
-          </div>
+            </PersistentTab>
+            <PersistentTab value="replay" active={tab}>
+              <ReplayPanel instrument={selected} tf={tf} theme={theme} />
+            </PersistentTab>
+            <PersistentTab value="ai" active={tab}>
+              <AiPanel instrument={selected} tf={tf} status={aiStatusApi.data} />
+            </PersistentTab>
+          </Tabs.Root>
         </aside>
+        </FocusScope>
       </div>
 
       <footer className="footer">
@@ -530,6 +603,7 @@ export default function App() {
         <span>{marketInfo?.name}</span>
       </footer>
 
+      {settingsOpen && !settings && <Modal title="Настройки" onClose={() => setSettingsOpen(false)}><RequestStatus state={settingsApi} label="Не удалось загрузить настройки" /></Modal>}
       {settingsOpen && settings && (
         <SettingsDialog
           settings={settings}
@@ -565,20 +639,30 @@ export default function App() {
       )}
 
       {screenerOpen && <ScreenerDialog onClose={() => setScreenerOpen(false)} onSelect={selectInstrument} />}
-      <div className="toasts" role="status" aria-live="polite">
-        {toasts.map((t) => (
-          <div className="toast" key={t.id}>
-            <div className="toast-body">
-              <b>{t.title}</b>
-              {t.text}
-            </div>
-            <button className="icon-btn" onClick={() => dismissToast(t.id)} aria-label="Закрыть уведомление">
-              <Icon name="close" size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
+      <Toaster
+        theme={theme as "dark" | "light"}
+        position="bottom-right"
+        closeButton
+        offset={{ bottom: 40, right: 14 }}
+        style={
+          {
+            "--normal-bg": "var(--panel)",
+            "--normal-text": "var(--text)",
+            "--normal-border": "var(--border)",
+            fontFamily: "inherit",
+          } as React.CSSProperties
+        }
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        actions={paletteActions}
+        instruments={watchApi.data ?? []}
+        onPick={selectInstrument}
+      />
     </div>
+    </TipProvider>
     </AiContext.Provider>
   );
 }

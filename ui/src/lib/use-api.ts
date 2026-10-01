@@ -18,6 +18,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
   const currentDeps = useRef(deps);
   currentDeps.current = deps;
   const [error, setError] = useState<string>();
+  const errorDeps = useRef<unknown[]>([]);
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
   const seq = useRef(0);
@@ -38,6 +39,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
       setError(undefined);
     } catch (e) {
       if (id !== seq.current) return;
+      errorDeps.current = requestedDeps;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (id === seq.current) setLoading(false);
@@ -64,7 +66,8 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: unknown[], pollMs
   }, [pollMs, run]);
 
   const same = dataDeps.current.length === deps.length && deps.every((d, i) => Object.is(d, dataDeps.current[i]));
-  return { data: same ? data : undefined, error, loading, reload: () => setTick((t) => t + 1) };
+  const sameError = errorDeps.current.length === deps.length && deps.every((d, i) => Object.is(d, errorDeps.current[i]));
+  return { data: fn && same ? data : undefined, error: fn && sameError ? error : undefined, loading, reload: () => setTick((t) => t + 1) };
 }
 
 /** localStorage без падений: в приватном окне/заблокированном хранилище просто без памяти. */

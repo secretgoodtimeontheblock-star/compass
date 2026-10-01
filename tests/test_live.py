@@ -8,11 +8,12 @@ from fastapi.testclient import TestClient
 
 from compass.api.app import create_app
 from compass.live import OkxLive, candle_dto, sse, subscription
+from compass.models import Candle
 from tests.conftest import Env, day_candles
 
 
-def row(ts=1_800_000, close="12", confirm="0"):
-    return [str(ts), "10", "13", "9", close, "7", "7", "70", confirm]
+def row(ts=1_800_000, close="12", confirm="0", volume="7"):
+    return [str(ts), "10", "13", "9", close, volume, "7", "70", confirm]
 
 
 def test_daily_channel_uses_utc_and_rejects_non_spot():
@@ -41,13 +42,14 @@ def test_stream_restores_history_and_ignores_old_or_reopened_candles(env: Env, m
 
     env.services.adapters["crypto"] = env.adapter
     env.adapter.timeframes = ("1m",)
-    env.adapter.data["BTC/USDT"] = day_candles([10, 11])
+    env.adapter.data["BTC/USDT"] = [Candle(1_800_000, 10, 13, 9, 12, 8)]
     arg = subscription("BTC/USDT", "1m")
     sent = []
     closed = []
     payloads = [
         {"event": "subscribe", "arg": arg},
-        {"arg": arg, "data": [row(confirm="1")]},
+        {"arg": arg, "data": [row()]},  # событие до REST: объём 7 старее снимка с объёмом 8
+        {"arg": arg, "data": [row(confirm="1", volume="9")]},
         {"arg": arg, "data": [row(ts=1_740_000)]},
         {"arg": arg, "data": [row(close="11")]},
         {"arg": arg, "data": [row(ts=1_860_000)]},
@@ -116,3 +118,34 @@ def test_api_stream_metadata_validation_and_cleanup(env: Env):
         assert feed.connections == 0
         feed.connections = feed.max_connections
         assert client.get("/api/live", params={"symbol": "BTC/USDT"}).status_code == 429
+
+
+def test_polling_live_streams_moex_and_dedups(env: Env):
+    from compass.live import PollingLive, poll_subscription
+
+    env.adapter.data["SBER"] = day_candles([10, 11, 12])
+    adapters = {"crypto": env.adapter}
+    with pytest.raises(ValueError):
+        poll_subscription(adapters, "nope", "SBER", "1d")
+    with pytest.raises(ValueError):
+        poll_subscription(adapters, "crypto", "../x", "1d")
+    feed = PollingLive(env.services.cache, adapters, {"crypto": 0.01})
+
+    async def run():
+        out = []
+        stream = feed.events("crypto", "SBER", "1d")
+        try:
+            async for event in stream:
+                out.append(event)
+                if len(out) >= 8:
+                    break
+        finally:
+            await stream.aclose()
+        return out
+
+    events = asyncio.run(run())
+    assert events[1].startswith("event: history")
+    candles = [e for e in events if e.startswith("event: candle")]
+    assert len(candles) == 2  # повторные опросы без изменений не дублируют свечи
+    statuses = [json.loads(e.splitlines()[1][6:]) for e in events if e.startswith("event: status")]
+    assert sum(s["state"] == "live" for s in statuses) >= 2  # тихий рынок — не обрыв связи

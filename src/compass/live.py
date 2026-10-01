@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 import aiohttp
 
 from compass.cache import CandleCache, CandlesResult
-from compass.markets.base import MarketError
+from compass.markets.base import MarketAdapter, MarketError
 from compass.models import TIMEFRAME_MS
 
 OKX_URL = "wss://ws.okx.com:8443/ws/v5/business"
@@ -79,10 +79,13 @@ class OkxLive:
                     async with session.ws_connect(OKX_URL, proxy=self.proxy, max_msg_size=256_000) as ws:
                         await ws.send_json({"op": "subscribe", "args": [arg]})
                         yield sse("status", {"state": "restoring", "message": "Восстанавливаем историю графика…"})
+                        snapshot_last = None
                         try:
                             result = await asyncio.to_thread(
                                 self.cache.get, "crypto", symbol, tf, 500, refresh=True,
                             )
+                            if not result.stale and result.candles:
+                                snapshot_last = result.candles[-1]
                             yield sse("history", history_dto(result))
                         except MarketError:
                             yield sse("history_error", {"message": "История пока недоступна. Повторим загрузку автоматически."})
@@ -117,6 +120,10 @@ class OkxLive:
                             for row in sorted(payload["data"], key=lambda x: int(x[0])):
                                 candle = candle_dto(row, tf)
                                 confirmed = str(row[8]) == "1"
+                                # Сообщения, накопившиеся во время REST, могут быть старее
+                                # снимка той же свечи. Её накопленный объём не должен откатиться.
+                                if snapshot_last and candle["t"] == snapshot_last.ts and candle["v"] < snapshot_last.volume:
+                                    continue
                                 if candle["t"] < last_candle_ts or (candle["t"] == last_candle_ts and last_confirmed):
                                     continue
                                 last_candle_ts, last_confirmed = candle["t"], confirmed
@@ -133,3 +140,79 @@ class OkxLive:
                     })
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 30)
+
+
+_POLL_SYMBOL = re.compile(r"[A-Za-z0-9._/-]{1,30}")
+# Интервал опроса: у крипты котировки меняются каждую секунду, у МосБиржи бесплатный
+# ISS отдаёт данные с задержкой ~15 минут, чаще спрашивать бессмысленно.
+POLL_SECONDS = {"crypto": 5.0, "moex": 30.0}
+
+
+def poll_subscription(adapters: dict[str, MarketAdapter], market: str, symbol: str, tf: str) -> None:
+    adapter = adapters.get(market)
+    if adapter is None:
+        raise ValueError(f"Неизвестный рынок: {market}")
+    if not _POLL_SYMBOL.fullmatch(symbol) or ".." in symbol:
+        raise ValueError("Некорректный тикер")
+    if tf not in adapter.timeframes:
+        raise ValueError(f"Таймфрейм {tf} недоступен для рынка {market}")
+
+
+class PollingLive:
+    """Живой график для рынков без публичного WebSocket (МосБиржа, не-OKX биржи ccxt).
+
+    Тот же протокол SSE, что у OkxLive, но свежие свечи берутся лёгким REST-опросом
+    последних баров. Поток не выдаёт себя за тиковый: источник и задержка остаются видны."""
+
+    def __init__(self, cache: CandleCache, adapters: dict[str, MarketAdapter], intervals: dict[str, float] | None = None) -> None:
+        self.cache = cache
+        self.adapters = adapters
+        self.intervals = intervals or POLL_SECONDS
+        self.connections = 0
+        self.max_connections = 4
+
+    def supports(self, market: str) -> bool:
+        return market in self.adapters
+
+    async def events(self, market: str, symbol: str, tf: str) -> AsyncIterator[str]:
+        poll_subscription(self.adapters, market, symbol, tf)
+        adapter = self.adapters[market]
+        source = getattr(adapter, "source_id", market)
+        interval = self.intervals.get(market, 10.0)
+        tf_ms = TIMEFRAME_MS[tf]
+        delay = interval
+        seen: dict[int, tuple] = {}
+        yield sse("status", {"state": "restoring", "message": "Загружаем историю графика…"})
+        try:
+            result = await asyncio.to_thread(self.cache.get, market, symbol, tf, 500, refresh=True)
+            yield sse("history", history_dto(result))
+        except MarketError:
+            yield sse("history_error", {"message": "История пока недоступна. Повторим загрузку автоматически."})
+        while True:
+            try:
+                rows = await asyncio.to_thread(adapter.fetch_candles, symbol, tf, None, 3)
+                delay = interval
+                now_ms = int(time.time() * 1000)
+                for c in rows[-2:]:
+                    key = (c.open, c.high, c.low, c.close, c.volume)
+                    if seen.get(c.ts) == key:
+                        continue
+                    seen[c.ts] = key
+                    yield sse("candle", {
+                        "candle": {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume},
+                        "confirmed": c.ts + tf_ms <= now_ms, "received_at": now_ms, "source": source,
+                    })
+                if not rows or len(seen) > 50:
+                    seen = {c.ts: (c.open, c.high, c.low, c.close, c.volume) for c in rows[-2:]}
+                yield sse("status", {
+                    "state": "live" if rows else "reconnecting",
+                    "message": "Источник отвечает. Проверяем свечи автоматически." if rows else "Источник не вернул свечи. Повторим запрос автоматически.",
+                })
+                yield ": heartbeat" + chr(10) + chr(10)
+            except MarketError:
+                yield sse("status", {
+                    "state": "reconnecting",
+                    "message": f"Источник не отвечает. Повтор через {int(delay)} с. История сохранена.",
+                })
+                delay = min(delay * 2, 60)
+            await asyncio.sleep(delay)

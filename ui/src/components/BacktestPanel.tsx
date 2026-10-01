@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtDate, fmtNum, fmtPct, fmtPrice, pnlClass } from "../lib/format";
 import type { BacktestRequestBody, BacktestResponse, Instrument, Settings, Strategy, Trade } from "../types";
@@ -47,12 +47,6 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
     if (instrument) setFee(instrument.market === "moex" ? 0.05 : 0.1);
   }, [instrument?.market]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // результат относится к конкретной связке — при смене тикера/стратегии/таймфрейма он устарел
-  useEffect(() => {
-    setRes(undefined);
-    setError(undefined);
-  }, [instrument?.symbol, instrument?.market, tf, sid]);
-
   const profileKey = instrument ? `${instrument.market}|${instrument.symbol}` : "";
   const savedProfile = settings?.instrument_strategies?.[profileKey];
 
@@ -69,6 +63,16 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
     setSid(savedProfile.strategy);
     setParams(savedProfile.params);
   }, [profileKey, savedProfile]);
+
+  const contextKey = JSON.stringify([instrument?.market, instrument?.symbol, tf, sid, params, capital, depth, fee, slip, closeEod, useStop, stopMult, targetR, riskPct]);
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current++;
+    setRes(undefined);
+    setError(undefined);
+    setBusy(false);
+    return () => { generation.current++; };
+  }, [contextKey]);
 
   if (!instrument || !strat) {
     return <div className="empty">Выберите тикер, чтобы проверить на нём стратегию.</div>;
@@ -97,32 +101,17 @@ export function BacktestPanel({ instrument, tf, strategies, settings, theme, onS
   const run = async () => {
     setBusy(true);
     setError(undefined);
+    const id = ++generation.current;
     try {
-      setRes(
-        await api.backtest({
-          market: instrument.market,
-          symbol: instrument.symbol,
-          tf,
-          strategy: strat.id,
-          params,
-          limit: depth,
-          capital,
-          fee_pct: fee,
-          slippage_pct: slip,
-          ...(useStop
-            ? {
-                stop_atr_mult: Number(stopMult),
-                target_r: targetR ? Number(targetR) : undefined,
-                risk_pct: riskPct ? Number(riskPct) : undefined,
-              }
-            : {}),
-        }),
-      );
+      const result = await api.backtest(requestBody());
+      if (id === generation.current) setRes(result);
     } catch (e) {
-      setRes(undefined);
-      setError(e instanceof Error ? e.message : "Ошибка бэктеста");
+      if (id === generation.current) {
+        setRes(undefined);
+        setError(e instanceof Error ? e.message : "Ошибка бэктеста");
+      }
     } finally {
-      setBusy(false);
+      if (id === generation.current) setBusy(false);
     }
   };
 

@@ -71,7 +71,7 @@ def check_candles(candles: Sequence[Candle], market: str, tf: str) -> dict:
 
     zero = sum(1 for c in candles if c.volume == 0)
     if n and zero / n > _ZERO_VOLUME_SHARE:
-        issues.append(Issue("zero_volume", "warning", zero, f"Свечей без объёма: {zero} из {n}. Инструмент торгуется редко."))
+        issues.append(Issue("zero_volume", "warning", zero, f"Свечей с нулевым или непереданным объёмом: {zero} из {n}. По ним нельзя оценить активность торгов."))
 
     status = "error" if any(i.severity == "error" for i in issues) else "warning" if issues else "ok"
     return {

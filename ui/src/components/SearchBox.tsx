@@ -25,9 +25,10 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
   // поиск с паузой 300 мс; устаревший ответ (пользователь уже дописал) отбрасываем
   useEffect(() => {
     const text = q.trim();
+    setResults([]);
+    setError(undefined);
+    setBusy(!!text);
     if (!text) {
-      setResults([]);
-      setError(undefined);
       return;
     }
     let stale = false;
@@ -71,7 +72,7 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector('[role="dialog"]') || t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       e.preventDefault();
       input.current?.focus();
     };
@@ -116,7 +117,7 @@ export function SearchBox({ market, catalogSize, onPick }: Props) {
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             setActive((i) => Math.max(i - 1, 0));
-          } else if (e.key === "Enter" && results[active]) pick(results[active]);
+          } else if (e.key === "Enter" && open && !busy && results[active]) pick(results[active]);
           else if (e.key === "Escape") {
             if (open) e.stopPropagation();
             setOpen(false);

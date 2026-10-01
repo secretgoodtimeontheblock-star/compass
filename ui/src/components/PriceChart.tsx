@@ -90,6 +90,7 @@ export function PriceChart({ candles, tf, signals, trades, overlays, theme, rese
       chart.current = null;
       series.current = null;
       lastKey.current = "";
+      priceLines.current = [];
     };
   }, []);
 

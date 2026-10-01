@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 import time
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from compass.data_quality import check_candles
 from compass.experiments import Experiment, ExperimentLog, multiple_testing_warning
 from compass.journal import MODES, Entry, Journal
 from compass.levels import Level, LevelStore
-from compass.live import OkxLive, history_dto, subscription
+from compass.live import OkxLive, PollingLive, history_dto, poll_subscription, subscription
 from compass.markets.base import MarketAdapter, MarketError
 from compass.models import (
     INTRADAY_TFS,
@@ -91,6 +91,7 @@ class Services:
     ai: AiService
     scanner: BackgroundScanner | None = None  # None — фонового скана нет (тесты)
     live: OkxLive | None = None
+    polling: PollingLive | None = None  # опрос для рынков без WebSocket
     plans: PlanStore | None = None
     experiments: ExperimentLog | None = None
     accounts: AccountStore | None = None
@@ -220,7 +221,8 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                 "id": a.id, "name": a.name, "timeframes": list(a.timeframes),
                 "source": getattr(a, "source_id", a.id),
                 "delay_seconds": 900 if a.id == "moex" else None,
-                "live_supported": a.id == "crypto" and svc.live is not None,
+                "live_supported": _live_for(a.id) is not None,
+                "live_kind": ("stream" if a.id == "crypto" and svc.live is not None else "poll") if _live_for(a.id) is not None else None,
                 "instruments": getattr(a, "catalog_size", lambda: 0)(),
             }
             for a in svc.adapters.values()
@@ -238,25 +240,36 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         res = svc.cache.get(market, symbol, tf, limit)
         return {**history_dto(res), "quality": check_candles(res.candles, market, tf)}
 
+    def _live_for(market: str):
+        if market == "crypto" and svc.live is not None:
+            return svc.live
+        return svc.polling if svc.polling is not None and svc.polling.supports(market) else None
+
     @app.get("/api/live")
-    async def live_candles(request: Request, symbol: str, tf: str = "1d"):
-        if svc.live is None:
-            raise HTTPException(409, "Публичный поток доступен только для OKX")
-        subscription(symbol, tf)
+    async def live_candles(request: Request, symbol: str, tf: str = "1d", market: str = "crypto"):
+        feed = _live_for(market)
+        if feed is None:
+            raise HTTPException(409, "Для этого рынка живое обновление недоступно")
+        if feed is svc.live:
+            subscription(symbol, tf)
+        else:
+            poll_subscription(svc.adapters, market, symbol, tf)
         # Локальный endpoint не должен открывать потоки по запросу стороннего сайта.
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
             raise HTTPException(403, "Запрос должен идти из Compass")
-        if svc.live.connections >= svc.live.max_connections:
+        if feed.connections >= feed.max_connections:
             raise HTTPException(429, "Слишком много открытых графиков с потоком")
 
         async def stream():
-            svc.live.connections += 1
+            feed.connections += 1
             try:
-                async for event in svc.live.events(symbol, tf):
-                    yield event
+                source = feed.events(symbol, tf) if feed is svc.live else feed.events(market, symbol, tf)
+                async with aclosing(source):
+                    async for event in source:
+                        yield event
             finally:
-                svc.live.connections -= 1
+                feed.connections -= 1
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={
             "Cache-Control": "no-cache", "X-Accel-Buffering": "no",

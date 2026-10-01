@@ -54,9 +54,9 @@ export function ScreenerDialog({ onClose, onSelect }: { onClose: () => void; onS
   );
 
   return (
-    <Modal title="Скринер избранного" onClose={onClose}>
+    <Modal title="Скринер избранного" onClose={onClose} wide>
       {data.loading && !data.data && <div className="muted">Считаем…</div>}
-      {data.error && <div className="error">{data.error}</div>}
+      {data.error && <div className="error" role="alert">{data.error} <button className="btn small" onClick={data.reload}>Повторить</button></div>}
       {data.data && rows.length === 0 && <div className="empty">В избранном пока нет инструментов.</div>}
       {rows.length > 0 && (
         <div style={{ overflowX: "auto" }}>

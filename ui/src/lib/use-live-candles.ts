@@ -11,8 +11,8 @@ interface Feed {
   receivedAt?: number;
 }
 
-export function useLiveCandles(symbol: string | undefined, tf: string, enabled: boolean) {
-  const key = enabled && symbol ? `${symbol}:${tf}` : "";
+export function useLiveCandles(market: string, symbol: string | undefined, tf: string, enabled: boolean, polling = false) {
+  const key = enabled && symbol ? `${market}:${symbol}:${tf}` : "";
   const [feed, setFeed] = useState<Feed>();
   const [attempt, setAttempt] = useState(0);
   const lastReceived = useRef(0);
@@ -21,13 +21,14 @@ export function useLiveCandles(symbol: string | undefined, tf: string, enabled: 
     if (!key || !symbol) return;
     let active = true;
     lastReceived.current = 0;
-    setFeed({ key, state: "connecting", message: "Подключаем поток OKX…", updates: [] });
-    const connection = new EventSource(`/api/live?${new URLSearchParams({ symbol, tf })}`);
+    setFeed({ key, state: "connecting", message: "Подключаем источник…", updates: [] });
+    const connection = new EventSource(`/api/live?${new URLSearchParams({ market, symbol, tf })}`);
     const update = (fn: (f: Feed) => Feed) => {
       if (active) setFeed((f) => f?.key === key ? fn(f) : f);
     };
     connection.addEventListener("status", (event) => {
-      const status = JSON.parse((event as MessageEvent).data) as { state: LiveState; message: string };
+      const status = JSON.parse((event as MessageEvent).data) as { state: LiveState; message: string; received_at?: number };
+      if (status.state === "live") lastReceived.current = Date.now();
       update((f) => ({ ...f, ...status }));
       if (status.state === "unavailable") connection.close();
     });
@@ -43,7 +44,7 @@ export function useLiveCandles(symbol: string | undefined, tf: string, enabled: 
       const { candle } = JSON.parse((event as MessageEvent).data) as { candle: Candle };
       lastReceived.current = Date.now();
       update((f) => ({
-        ...f, state: "live", message: "Поток OKX подключён",
+        ...f, state: "live", message: "Источник подключён",
         receivedAt: lastReceived.current,
         updates: [...f.updates.filter((u) => u.candle.t !== candle.t), { candle, receivedAt: lastReceived.current }].slice(-500),
       }));
@@ -52,7 +53,7 @@ export function useLiveCandles(symbol: string | undefined, tf: string, enabled: 
       ...f, state: "reconnecting", message: "Нет связи с потоком. Переподключаемся автоматически…",
     }));
     const timer = setInterval(() => {
-      if (lastReceived.current && Date.now() - lastReceived.current > 15_000) {
+      if (lastReceived.current && Date.now() - lastReceived.current > (polling ? 90_000 : 15_000)) {
         update((f) => f.state === "live" ? {
           ...f, state: "reconnecting", message: "Обновления задерживаются. Проверяем соединение…",
         } : f);
@@ -63,7 +64,7 @@ export function useLiveCandles(symbol: string | undefined, tf: string, enabled: 
       clearInterval(timer);
       connection.close();
     };
-  }, [key, symbol, tf, attempt]);
+  }, [key, market, symbol, tf, attempt, polling]);
 
   return { feed: feed?.key === key && key ? feed : undefined, retry: () => setAttempt((n) => n + 1) };
 }

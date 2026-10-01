@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useScopedState } from "../lib/use-scoped-state";
 import { api } from "../api";
 import { useAiRun } from "../lib/ai-context";
 import { fmtDateTime, fmtNum, fmtPrice, pnlClass, toLocalInput } from "../lib/format";
@@ -17,27 +18,29 @@ interface Props {
   onChanged: () => void;
   onSelect: (i: Instrument) => void;
   draft: JournalDraft | null;
+  onDraftConsumed: () => void;
 }
 
 const MODE_LABELS: Record<JournalMode, string> = { real: "Реальные", paper: "Учебные", historical: "Исторические" };
 
-export function JournalPanel({ instrument, entries, positions, mode, onModeChange, lastPrice, onChanged, onSelect, draft }: Props) {
+export function JournalPanel({ instrument, entries, positions, mode, onModeChange, lastPrice, onChanged, onSelect, draft, onDraftConsumed }: Props) {
+  const scope = `${instrument?.market}:${instrument?.symbol}:${mode}`;
   const ai = useAiRun();
   const review = (refresh = false) => void ai.run((r) => api.reviewJournal({}, r), refresh);
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [qty, setQty] = useState("");
-  const [price, setPrice] = useState("");
-  const [fee, setFee] = useState("0");
-  const [when, setWhen] = useState(() => toLocalInput(Date.now()));
-  const [note, setNote] = useState("");
-  const [reason, setReason] = useState("");
-  const [plannedStop, setPlannedStop] = useState("");
-  const [signalId, setSignalId] = useState<number | null>(null);
-  const [planRef, setPlanRef] = useState<{ uid: string; id?: number } | null>(null);
-  const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [deleted, setDeleted] = useState<JournalEntry[] | null>(null);
-  const [info, setInfo] = useState<string>();
+  const [side, setSide] = useScopedState<"buy" | "sell">(scope, "buy");
+  const [qty, setQty] = useScopedState(scope, "");
+  const [price, setPrice] = useScopedState(scope, "");
+  const [fee, setFee] = useScopedState(scope, "0");
+  const [when, setWhen] = useScopedState(scope, () => toLocalInput(Date.now()));
+  const [note, setNote] = useScopedState(scope, "");
+  const [reason, setReason] = useScopedState(scope, "");
+  const [plannedStop, setPlannedStop] = useScopedState(scope, "");
+  const [signalId, setSignalId] = useScopedState<number | null>(scope, null);
+  const [planRef, setPlanRef] = useScopedState<{ uid: string; id?: number } | null>(scope, null);
+  const [error, setError] = useScopedState<string | undefined>(scope, undefined);
+  const [busy, setBusy] = useScopedState(scope, false);
+  const [deleted, setDeleted] = useScopedState<JournalEntry[] | null>(scope, null);
+  const [info, setInfo] = useScopedState<string | undefined>(scope, undefined);
 
   useEffect(() => {
     if (!draft) return;
@@ -50,6 +53,7 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
     setSignalId(draft.signalId);
     setPlanRef(draft.planUid ? { uid: draft.planUid, id: draft.planId } : null);
     setWhen(toLocalInput(Date.now()));
+    onDraftConsumed();
   }, [draft]);
 
   const submit = async () => {

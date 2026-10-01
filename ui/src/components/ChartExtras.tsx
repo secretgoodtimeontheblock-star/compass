@@ -22,11 +22,13 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
   const [price, setPrice] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const [removed, setRemoved] = useState<LevelDto>();
   const [second, setSecond] = useState(false);
   const tfs = marketInfo?.timeframes ?? [];
   const [tf2, setTf2] = useState("");
-  const secondTf = tf2 && tfs.includes(tf2) && tf2 !== tf ? tf2 : (tfs[Math.min(tfs.indexOf(tf) + 2, tfs.length - 1)] ?? tf);
+  const alternatives = tfs.filter((t) => t !== tf);
+  const secondTf = alternatives.includes(tf2) ? tf2 : (alternatives.find((t) => tfs.indexOf(t) > tfs.indexOf(tf)) ?? alternatives.at(-1) ?? tf);
   const candles2 = useApi(
     second ? () => api.candles(instrument.market, instrument.symbol, secondTf, 300) : null,
     [second, instrument.market, instrument.symbol, secondTf],
@@ -34,8 +36,10 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
   );
 
   const add = async () => {
+    if (busy) return;
     const p = Number(price || lastPrice || 0);
     setError(undefined);
+    setBusy(true);
     try {
       await api.addLevel({ market: instrument.market, symbol: instrument.symbol, price: p, label });
       setPrice("");
@@ -43,6 +47,8 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
       onLevelsChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить уровень");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -90,9 +96,9 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
           style={{ width: 90 }}
           onChange={(e) => setPrice(e.target.value)}
         />
-        <input value={label} maxLength={60} placeholder="подпись" aria-label="Подпись уровня" style={{ width: 120 }} onChange={(e) => setLabel(e.target.value)} />
-        <button className="btn small" onClick={() => void add()}>
-          Добавить уровень
+        <input type="text" value={label} maxLength={60} placeholder="подпись" aria-label="Подпись уровня" style={{ width: 120 }} onChange={(e) => setLabel(e.target.value)} />
+        <button className="btn small" disabled={busy} onClick={() => void add()}>
+          {busy ? "Сохраняем…" : "Добавить уровень"}
         </button>
         {removed && (
           <button className="btn ghost small" onClick={() => void restore()}>

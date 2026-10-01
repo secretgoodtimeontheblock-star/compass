@@ -6,10 +6,11 @@ interface Props {
   onPick: (i: Instrument) => Promise<void>;
   onBacktest: () => void;
   onLearn: () => void;
+  onTrain: () => void;
   onClose: () => void;
 }
 
-export function GettingStarted({ selected, onPick, onBacktest, onLearn, onClose }: Props) {
+export function GettingStarted({ selected, onPick, onBacktest, onLearn, onTrain, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const start = async () => {
@@ -38,13 +39,14 @@ export function GettingStarted({ selected, onPick, onBacktest, onLearn, onClose 
       <div className="getting-started-actions">
         <button className="btn primary" onClick={() => void start()} disabled={busy} aria-busy={busy}>Открыть BTC/USDT</button>
         <button className="btn" onClick={onBacktest} disabled={!selected}>Проверить на истории</button>
+        <button className="btn" onClick={onTrain} disabled={!selected}>Тренироваться без денег</button>
         <button className="btn" onClick={onLearn}>Как устроен AI</button>
       </div>
       {error && <p role="alert" className="down">{error}</p>}
       <details>
         <summary>Что бесплатно и с чего пока не стоит начинать</summary>
         <p>Криптопоток OKX и история МосБиржи не требуют подписки. Данные акций задержаны на 15 минут. AI по умолчанию выключен: облачные провайдеры могут требовать оплаты, локальная Ollama — отдельной установки.</p>
-        <p>Проверка на истории не повторяет реальное исполнение: стопы пока не моделируются. Журнал предназначен для ручных записей; автоматического учебного счёта пока нет.</p>
+        <p>В проверке можно включить стоп, цель и размер позиции по риску. Это модель по свечам: реальное исполнение может отличаться. Во вкладке «Тренировка» есть учебный счёт с пошаговой историей; реальные деньги и заявки не используются.</p>
       </details>
     </section>
   );

@@ -1,62 +1,51 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
-
-const FOCUSABLE =
-  'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+import * as Dialog from "@radix-ui/react-dialog";
+import { useRef, type ReactNode } from "react";
+import { Icon } from "./Icon";
 
 interface Props {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean;
 }
 
 /**
- * Модальное окно: фокус остаётся внутри, Esc закрывает, по закрытии фокус возвращается на кнопку,
- * которая окно открыла. Если внутри уже есть элемент с autofocus-логикой, фокус на первое поле
- * ставит сам диалог только когда никто другой не успел его забрать.
+ * Модальное окно на Radix Dialog: фокус заперт внутри, Esc закрывает, по закрытии фокус
+ * возвращается на кнопку, открывшую окно. Элемент с data-autofocus получает фокус первым.
  */
-export function Modal({ title, onClose, children }: Props) {
-  const box = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  const close = useRef(onClose);
-  close.current = onClose;
-
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const el = box.current;
-    if (el && !el.contains(document.activeElement)) {
-      (el.querySelector<HTMLElement>("[data-autofocus]") ?? el.querySelector<HTMLElement>(FOCUSABLE) ?? el).focus();
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        close.current();
-      } else if (e.key === "Tab" && el) {
-        const items = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)];
-        if (!items.length) return;
-        const first = items[0];
-        const last = items[items.length - 1];
-        if (e.shiftKey && (document.activeElement === first || !el.contains(document.activeElement))) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("keydown", onKey, true);
-      opener?.isConnected && opener.focus();
-    };
-  }, []);
-
+export function Modal({ title, onClose, children, wide = false }: Props) {
+  const returnFocus = useRef<HTMLElement | null>(null);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={box} tabIndex={-1}>
-        <h2 id={titleId}>{title}</h2>
-        {children}
-      </div>
-    </div>
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="overlay" />
+        <Dialog.Content
+          className={wide ? "dialog dialog-wide" : "dialog"}
+          aria-describedby={undefined}
+          onOpenAutoFocus={(e) => {
+            returnFocus.current = document.activeElement as HTMLElement;
+            const target = (e.currentTarget as HTMLElement).querySelector<HTMLElement>("[data-autofocus]");
+            if (target) {
+              e.preventDefault();
+              target.focus();
+            }
+          }}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            if (document.querySelector('[role="dialog"][data-state="open"]')) return;
+            if (returnFocus.current?.isConnected) returnFocus.current.focus();
+            else document.querySelector<HTMLElement>('.right.open [role="tab"][aria-selected="true"], .topbar [aria-label="Открыть палитру команд"]')?.focus();
+          }}
+        >
+          <div className="dialog-head">
+            <Dialog.Title>{title}</Dialog.Title>
+            <Dialog.Close className="icon-btn" aria-label="Закрыть">
+              <Icon name="close" size={18} />
+            </Dialog.Close>
+          </div>
+          {children}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

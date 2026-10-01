@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtDate, fmtNum, fmtPct, pnlClass } from "../lib/format";
 import type { BacktestRequestBody, OosResponse, OosSegment, Strategy } from "../types";
@@ -34,7 +34,18 @@ export function OosPanel({ strategy, request }: Props) {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
+  const contextKey = JSON.stringify([request, trainPct, optimize, grid]);
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current++;
+    setRes(undefined);
+    setError(undefined);
+    setBusy(false);
+    return () => { generation.current++; };
+  }, [contextKey]);
+
   const run = async () => {
+    const id = ++generation.current;
     setBusy(true);
     setError(undefined);
     try {
@@ -51,12 +62,14 @@ export function OosPanel({ strategy, request }: Props) {
           parsed[p.name] = nums;
         }
       }
-      setRes(await api.validate({ ...request, train_pct: trainPct, grid: parsed }));
+      const result = await api.validate({ ...request, train_pct: trainPct, grid: parsed });
+      if (id === generation.current) setRes(result);
     } catch (e) {
+      if (id !== generation.current) return;
       setRes(undefined);
       setError(e instanceof Error ? e.message : "Ошибка проверки");
     } finally {
-      setBusy(false);
+      if (id === generation.current) setBusy(false);
     }
   };
 

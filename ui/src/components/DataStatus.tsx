@@ -17,7 +17,8 @@ export function DataStatus({ market, state, message, receivedAt, fetchedAt, stal
   const live = state === "live";
   const delayed = market?.id === "moex";
   const label = delayed ? "МосБиржа · задержка 15 мин"
-    : live ? "OKX · живой поток" : market?.live_supported ? "OKX · поток не готов" : `${market?.name ?? "Источник"} · периодическое обновление`;
+    : live ? (market?.live_kind === "poll" ? `${market.name} · автообновление` : "OKX · живой поток")
+    : market?.live_supported ? "Поток не готов" : `${market?.name ?? "Источник"} · периодическое обновление`;
   const at = live ? receivedAt : fetchedAt ? fetchedAt * 1000 : undefined;
   const time = at ? new Date(at).toLocaleTimeString("ru-RU") : undefined;
   return (
@@ -32,11 +33,11 @@ export function DataStatus({ market, state, message, receivedAt, fetchedAt, stal
         )}
       </div>
       <div className="data-detail" role="status">
-        {delayed ? "Бесплатный источник. Цена отстаёт от торгов; используйте для изучения истории."
+        {delayed ? `Бесплатный источник. Цена отстаёт от торгов${live ? "; график обновляется опросом" : ""}. ${state && !live ? message ?? "Подключаем источник…" : ""}`
           : live ? "Публичные данные без счёта и ключей. Текущая свеча ещё может меняться."
-          : message ?? (market?.live_supported ? "Выберите криптопару — поток подключится автоматически." : "История запрашивается раз в минуту.")}
+          : message ?? (market?.live_supported ? "Выберите инструмент — обновление подключится автоматически." : "История запрашивается раз в минуту.")}
         {stale && " Историю не удалось обновить — показан сохранённый кэш."}
-        {!hasData && " Ожидаем данные графика."}
+        {!hasData && " Данных для графика пока нет."}
         {gap && " В истории есть пропуски. Не используйте этот участок для проверки стратегии."}
         {quality?.issues.filter((i) => !(gap && i.code === "gaps")).map((i) => ` ${i.message}`)}
       </div>

@@ -28,6 +28,26 @@ def test_moex_parses_msk_time_and_ohlc() -> None:
     assert (c.open, c.close, c.high, c.low, c.volume) == (100, 101, 102, 99, 50)
 
 
+def test_moex_keeps_prices_when_volume_is_not_provided() -> None:
+    from compass.data_quality import check_candles
+
+    row = _moex_row(0)
+    row[5] = None
+    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_candles_json([row])))))
+    (c,) = a.fetch_candles("USD000UTSTOM", "1d", None, 10)
+    assert c.close == 101 and c.volume == 0
+    issue = check_candles([c], "moex", "1d")["issues"][0]
+    assert issue["code"] == "zero_volume" and "непереданным" in issue["message"]
+
+
+def test_moex_does_not_fill_missing_prices() -> None:
+    row = _moex_row(0)
+    row[0] = None
+    a = MoexAdapter(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_candles_json([row])))))
+    with pytest.raises(MarketError, match="неполные или некорректные"):
+        a.fetch_candles("SBER", "1d", None, 10)
+
+
 def test_moex_paginates_until_short_page() -> None:
     offsets: list[str] = []
 

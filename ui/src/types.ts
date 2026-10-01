@@ -9,6 +9,7 @@ export interface Market {
   source: string;
   delay_seconds: number | null;
   live_supported: boolean;
+  live_kind?: "stream" | "poll" | null;
   instruments: number;
 }
 
