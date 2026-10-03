@@ -12,7 +12,7 @@ from compass.api.app import create_app
 from compass.markets import MarketError
 from compass.models import Candle, Instrument
 from compass.screener import MIN_BARS, screen_row
-from tests.conftest import DAY, Env, day_candles
+from tests.conftest import DAY, Env, day_candles, with_next_open
 
 
 def frame(closes, volumes=None, high_add=1.0, low_sub=1.0) -> pd.DataFrame:
@@ -56,6 +56,7 @@ def watch(env: Env, symbol: str, closes) -> None:
 
 def test_screener_api_rows_errors_levels_signals_and_no_future(env: Env) -> None:
     watch(env, "XYZ", [10.0] * 45 + [12.0])  # пробой на последней закрытой свече
+    env.adapter.data["XYZ"] = with_next_open(env.adapter.data["XYZ"])
     watch(env, "SHORT", [10.0] * 10)
     watch(env, "BAD", MarketError("источник лёг"))
     env.now[0] = 46 * DAY + 1

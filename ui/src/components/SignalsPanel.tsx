@@ -164,7 +164,7 @@ function SignalCard({
         {STRATEGY_SHORT[s.strategy] ?? s.strategy} · {s.tf} · {fmtDateTime(s.candle_ts)}
       </div>
       <dl className="kv num">
-        <dt>Цена закрытия</dt>
+        <dt>{s.fill_at === "next_open" ? "Открытие следующей свечи" : "Цена закрытия"}</dt>
         <dd>{fmtPrice(s.price)}</dd>
         {buy && (
           <>
@@ -193,6 +193,11 @@ function SignalCard({
           </>
         )}
       </dl>
+      {s.fill_at === "next_open" && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Цена — открытие следующей свечи. 15-минутная задержка ленты МосБиржи оставляет её той же.
+        </p>
+      )}
       {buy && s.swing && (
         <p className="caveat" style={{ marginTop: 6 }}>
           {s.swing.risk_note} Дневной свинг: держать до цели или стопа. В сделку ставятся {fmtNum(s.swing.stake, 0)} USDT

@@ -26,6 +26,16 @@ from compass.watchlist import Watchlist
 DAY = 86_400_000
 
 
+def with_next_open(candles: list[Candle], open_price: float | None = None, ts: int | None = None) -> list[Candle]:
+    """Следующая свеча после ряда: для МосБиржи её открытие и есть цена сигнала."""
+    last = candles[-1]
+    px = last.close if open_price is None else open_price
+    return [
+        *candles,
+        Candle(last.ts + DAY if ts is None else ts, px, max(last.high, px), min(last.low, px), px, last.volume),
+    ]
+
+
 def day_candles(closes: list[float], opens: list[float] | None = None) -> list[Candle]:
     opens = opens or closes
     return [

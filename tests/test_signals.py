@@ -11,7 +11,7 @@ from compass.markets import MarketError
 from compass.models import Instrument
 from compass.notify import DISCLAIMER, TelegramNotifier, format_signal
 from compass.signals import Signal
-from tests.conftest import DAY, Env, day_candles
+from tests.conftest import DAY, Env, day_candles, with_next_open
 
 FLAT = [10.0] * 25
 BREAKOUT = FLAT + [12.0]  # пробой канала на последней свече → вход по donchian
@@ -32,7 +32,7 @@ def donchian(signals: list[Signal]) -> list[Signal]:
 
 def test_breakout_on_last_closed_candle_creates_buy_with_stop(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     res = env.services.engine.scan()
     (s,) = donchian(res.new)
@@ -45,7 +45,7 @@ def test_breakout_on_last_closed_candle_creates_buy_with_stop(env: Env) -> None:
 
 def test_rescan_does_not_duplicate_or_renotify(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     env.services.engine.scan()
     sent = len(env.notifier.sent)
@@ -61,10 +61,44 @@ def test_unclosed_last_candle_is_ignored(env: Env) -> None:
     assert donchian(env.services.engine.scan().new) == []
 
 
+def test_moex_signal_waits_until_the_next_candle_exists(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    assert donchian(env.services.engine.scan().new) == []
+
+
+def test_moex_signal_price_is_the_next_open(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT), 13.5)
+    env.now[0] = closed_after(len(BREAKOUT))
+    (s,) = donchian(env.services.engine.scan().new)
+    assert s.side == "buy" and s.price == 13.5 and s.candle_ts == 25 * DAY and s.fill_at == "next_open"
+    assert s.stop is not None and 0 < s.stop < s.price
+    assert "Открытие следующей свечи: 13.5" in format_signal(s)
+
+
+def test_moex_buy_skipped_when_open_is_already_through_the_stop(env: Env) -> None:
+    watch(env)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT), 1.0)
+    env.now[0] = closed_after(len(BREAKOUT))
+    assert donchian(env.services.engine.scan().new) == []
+
+
+def test_crypto_breakout_stays_on_the_close(env: Env) -> None:
+    env.services.adapters["crypto"] = env.adapter
+    env.services.watchlist.add(Instrument("XYZ", "XYZ", "crypto"))
+    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.now[0] = closed_after(len(BREAKOUT))
+    (s,) = [x for x in env.services.engine.scan().new if x.market == "crypto" and x.strategy == "donchian"]
+    assert s.price == 12.0 and s.fill_at is None
+    assert "Цена закрытия: 12" in format_signal(s)
+
+
 def test_exit_signal(env: Env) -> None:
     watch(env)
     closes = FLAT + [12.0] * 5 + [7.0]
-    env.adapter.data["XYZ"] = day_candles(closes)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(closes))
     env.now[0] = closed_after(len(closes))
     (s,) = donchian(env.services.engine.scan().new)
     assert s.side == "exit" and s.stop is None
@@ -74,7 +108,7 @@ def test_one_broken_source_does_not_stop_scan(env: Env) -> None:
     watch(env, "BAD")
     watch(env, "XYZ")
     env.adapter.data["BAD"] = MarketError("источник упал")
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     res = env.services.engine.scan()
     assert len(donchian(res.new)) == 1
@@ -102,7 +136,7 @@ def test_stale_cache_does_not_create_signals_and_recovers(env: Env) -> None:
     assert env.services.signals.list() == [] and env.notifier.sent == []
     assert client.get("/api/candles", params={"market": "moex", "symbol": "XYZ"}).json()["stale"]
 
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     assert donchian(env.services.engine.scan().new)
     assert env.notifier.sent
     assert env.services.engine.scan().new == []
@@ -148,7 +182,7 @@ def test_telegram_failure_is_swallowed_and_token_not_logged(caplog) -> None:
 
 def test_saved_strategy_replaces_the_default_scan(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     env.services.settings.update(
         {"instrument_strategies": {"moex|XYZ": {"strategy": "rsi_reversion", "params": {}}}}
@@ -205,7 +239,7 @@ def test_api_backtest_signals_risk_settings(env: Env) -> None:
 
 def test_api_scan_and_seen_flow(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     client = TestClient(create_app(env.services), base_url="http://127.0.0.1")
     assert any(s["strategy"] == "donchian" for s in client.post("/api/scan").json()["new"])
@@ -233,7 +267,7 @@ def test_backtest_excludes_unclosed_candle_and_says_so(env: Env) -> None:
 
 def test_signal_keeps_the_parameters_that_produced_it(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     env.services.settings.update(
         {"instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 5, "exit": 3}}}}
@@ -252,7 +286,7 @@ def test_signal_keeps_the_parameters_that_produced_it(env: Env) -> None:
 
 def test_explain_uses_signal_params_and_flags_legacy_signals(env: Env) -> None:
     watch(env)
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = closed_after(len(BREAKOUT))
     env.services.settings.update(
         {

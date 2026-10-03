@@ -83,6 +83,7 @@ export interface Signal {
   expires_at: number; // мс
   delay_seconds: number;
   late: boolean;
+  fill_at: "next_open" | null;
   notified_at: number | null;
   dismissed_at: number | null;
 }

@@ -1,9 +1,11 @@
+import time
+
 from fastapi.testclient import TestClient
 
 from compass.__main__ import build_services
 from compass.api.app import create_app
 from compass.config import Config
-from tests.conftest import DAY, ScriptedAdapter, day_candles
+from tests.conftest import DAY, ScriptedAdapter, day_candles, with_next_open
 
 
 def test_workflow_survives_restart(tmp_path, monkeypatch) -> None:
@@ -11,7 +13,8 @@ def test_workflow_survives_restart(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
     cfg = Config(tmp_path, "okx", None)
-    adapter = ScriptedAdapter({"SBER": day_candles([100.0] * 25 + [120.0])})
+    series = with_next_open(day_candles([100.0] * 25 + [120.0]), ts=int(time.time() * 1000))
+    adapter = ScriptedAdapter({"SBER": series})
     svc = build_services(cfg, background_scan=False)
     svc.adapters["moex"]._client.close()
     svc.adapters["moex"] = adapter
@@ -48,7 +51,7 @@ def test_workflow_survives_restart(tmp_path, monkeypatch) -> None:
             assert client.get("/api/journal/positions").json()[0]["qty"] == saved_entry["qty"]
             assert any(s["id"] == signal["id"] for s in client.get("/api/signals").json())
             with restored.cache._conn.lock:
-                assert restored.cache._conn.execute("SELECT COUNT(*) FROM candles").fetchone()[0] == 26
+                assert restored.cache._conn.execute("SELECT COUNT(*) FROM candles").fetchone()[0] == 27
     finally:
         restored.adapters["moex"]._client.close()
         restored.cache._conn.close()

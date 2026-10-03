@@ -26,7 +26,7 @@ from compass.api.app import create_app
 from compass.journal import Entry, Position
 from compass.models import Instrument
 from compass.signals import Signal
-from tests.conftest import DAY, Env, day_candles
+from tests.conftest import DAY, Env, day_candles, with_next_open
 
 # ---------------------------------------------------------------- проверка чисел
 
@@ -468,7 +468,7 @@ def test_snapshot_facts_computes_from_candles() -> None:
 
 def test_api_ai_flow(env: Env) -> None:
     env.services.watchlist.add(Instrument("XYZ", "XYZ", "moex"))
-    env.adapter.data["XYZ"] = day_candles([10.0] * 25 + [12.0])
+    env.adapter.data["XYZ"] = with_next_open(day_candles([10.0] * 25 + [12.0]))
     env.now[0] = 26 * DAY + 1
     env.services.engine.scan()
     (sig,) = [s for s in env.services.signals.list() if s.strategy == "donchian"]

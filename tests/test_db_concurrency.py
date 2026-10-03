@@ -48,11 +48,11 @@ def test_service_cannot_commit_another_threads_transaction(env: Env, operation: 
 
 
 def test_parallel_scan_journal_and_settings(env: Env) -> None:
-    from tests.conftest import DAY, day_candles
+    from tests.conftest import DAY, day_candles, with_next_open
 
     svc = env.services
     svc.watchlist.add(Instrument("SBER", "Сбер", "moex"))
-    env.adapter.data["SBER"] = day_candles([10.0] * 25 + [12.0])
+    env.adapter.data["SBER"] = with_next_open(day_candles([10.0] * 25 + [12.0]))
     env.now[0] = 26 * DAY + 1
 
     def work(i: int) -> None:

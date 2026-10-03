@@ -19,12 +19,18 @@ log = logging.getLogger("compass.notify")
 DISCLAIMER = "Не инвестиционная рекомендация."
 
 
+def _price_label(s: Signal) -> str:
+    if s.fill_at == "next_open":
+        return "Открытие следующей свечи"
+    return "Цена закрытия"
+
+
 def format_signal(s: Signal) -> str:
     name = STRATEGIES[s.strategy].name if s.strategy in STRATEGIES else s.strategy
     if s.side == "buy":
         head = f"🟢 Сигнал на ВХОД: {s.symbol} ({s.tf})"
         stop = f"\nОриентир стопа: {s.stop:g}" if s.stop else ""
-        body = f"Цена закрытия: {s.price:g}{stop}"
+        body = f"{_price_label(s)}: {s.price:g}{stop}"
         swing = swing_outcome(s.price, s.stop, s.target, s.leverage, s.stake)
         if swing:
             body += (
@@ -36,7 +42,7 @@ def format_signal(s: Signal) -> str:
             )
     else:
         head = f"🔴 Сигнал на ВЫХОД: {s.symbol} ({s.tf})"
-        body = f"Цена закрытия: {s.price:g}"
+        body = f"{_price_label(s)}: {s.price:g}"
     delay = feed_delay_s(s.market, s.tf)
     late = f"\n⚠ Данные с задержкой ~{delay // 60} мин: цена на бирже уже могла уйти." if delay else ""
     return f"{head}\nСтратегия: {name}\n{body}{late}\n{DISCLAIMER}"

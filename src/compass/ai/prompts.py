@@ -197,7 +197,12 @@ def explain_signal(
         "параметры стратегии: " + ", ".join(f"{p.label} = {params[p.name]}" for p in strat.params),
         f"таймфрейм: {s.tf}",
         f"свеча сигнала: {_iso(s.candle_ts, s.market)} (закрытая)",
-        f"цена закрытия свечи сигнала: {_g(s.price)}",
+        (
+            f"цена исполнения — открытие следующей свечи: {_g(s.price)}. "
+            "Задержка ленты МосБиржи эту цену не сдвигает."
+            if s.fill_at == "next_open"
+            else f"цена закрытия свечи сигнала: {_g(s.price)}"
+        ),
     ]
     if s.side == "buy":
         facts.append(f"ориентир стопа (цена − 2·ATR14): {_g(s.stop)}")

@@ -4,6 +4,10 @@
 (0→1 вход, 1→0 выход). Незакрытая свеча игнорируется: по ней стратегия ещё
 может передумать. Один и тот же сигнал на одной свече хранится один раз
 (UNIQUE в БД) — повторный скан ничего не дублирует и не шлёт повторно.
+
+Для МосБиржи цена сигнала — открытие следующей свечи, как в бэктесте.
+Закрытие, которое лента уже напечатала, результатом не считается: задержка
+ISS не сдвигает это открытие. Пока следующей свечи нет, сигнал не создаётся.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 
@@ -21,7 +25,7 @@ from compass.cache import CandleCache
 from compass.db import Connection
 from compass.indicators import atr
 from compass.markets.base import MarketError
-from compass.models import TIMEFRAME_MS, closed_candles
+from compass.models import TIMEFRAME_MS, Candle, closed_candles
 from compass.settings import Settings, profile_key
 from compass.strategies import STRATEGIES, candles_to_df, strategy_version
 from compass.swing import STOP_ATR_MULT, swing_plan
@@ -32,7 +36,7 @@ log = logging.getLogger("compass.signals")
 ATR_STOP_MULT = STOP_ATR_MULT  # ориентир стопа акций: цена входа − 2·ATR(14)
 _SIGNAL_SELECT = (
     "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, "
-    "strategy_version, notified_at, dismissed_at, target, leverage, stake FROM signals "
+    "strategy_version, notified_at, dismissed_at, target, leverage, stake, fill_at FROM signals "
 )
 HISTORY = 300  # свечей для расчёта — с запасом над прогревом любой стратегии
 
@@ -57,6 +61,7 @@ class Signal:
     target: float | None = None  # цель свинга; None — сигнал без плана на 100 USDT
     leverage: float | None = None
     stake: float | None = None  # изолированная маржа, USDT
+    fill_at: str | None = None  # "next_open" — МосБиржа, цена это открытие следующей свечи
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +73,7 @@ class ScanResult:
 def _row_to_signal(r: tuple) -> Signal:
     return Signal(*r[:10], seen=bool(r[10]), params=json.loads(r[11]) if r[11] else None,
                   strategy_version=r[12], notified_at=r[13], dismissed_at=r[14],
-                  target=r[15], leverage=r[16], stake=r[17])
+                  target=r[15], leverage=r[16], stake=r[17], fill_at=r[18])
 
 
 class SignalStore:
@@ -82,11 +87,11 @@ class SignalStore:
             cur = self._conn.execute(
                 "INSERT OR IGNORE INTO signals "
                 "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params, strategy_version, "
-                "target, leverage, stake) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "target, leverage, stake, fill_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (s.market, s.symbol, s.tf, s.strategy, s.side, s.candle_ts, s.price, s.stop, int(time.time()),
                  None if s.params is None else json.dumps(s.params, sort_keys=True), s.strategy_version,
-                 s.target, s.leverage, s.stake),
+                 s.target, s.leverage, s.stake, s.fill_at),
             )
         return cur.rowcount == 1
 
@@ -187,6 +192,22 @@ def signal_status(s: Signal, now_ms: int, valid_bars: int, acted: bool) -> str:
     return "expired" if now_ms >= signal_expires_at(s, valid_bars) else "active"
 
 
+def moex_fill_open(candles: Sequence[Candle], decision_ts: int) -> float | None:
+    """Открытие первой свечи после решения стратегии.
+
+    Это та же цена, по которой сделку считает бэктест. Закрытие сигнальной свечи
+    к этому моменту уже напечатано, и задержка ленты его не заменяет: открытие
+    следующей свечи от опоздания котировок не меняется. Пока свечи нет — входа нет.
+    """
+    nxt: Candle | None = None
+    for candle in candles:
+        if candle.ts > decision_ts and (nxt is None or candle.ts < nxt.ts):
+            nxt = candle
+    if nxt is None or nxt.open <= 0:
+        return None
+    return float(nxt.open)
+
+
 def in_quiet_hours(quiet: dict, now_ms: int, tz: tzinfo | None = None) -> bool:
     """Тихие часы по местному времени; окно может переходить через полночь (22:00–08:00)."""
     if not quiet.get("enabled"):
@@ -264,22 +285,38 @@ class SignalEngine:
                 prev, cur = int(target.iloc[-2]), int(target.iloc[-1])
                 if prev == cur:
                     continue
-                price = float(df["close"].iloc[-1])
+                decision_close = float(df["close"].iloc[-1])
+                decision_ts = int(df["ts"].iloc[-1])
                 side = "buy" if cur == 1 else "exit"
+                fill_at = None
+                if inst.market == "moex":
+                    opened = moex_fill_open(result.candles, decision_ts)
+                    if opened is None:
+                        continue
+                    price = opened
+                    fill_at = "next_open"
+                else:
+                    price = decision_close
                 stop = target_px = leverage = stake = None
                 if side == "buy" and not math.isnan(float(last_atr)) and float(last_atr) > 0:
+                    atr_f = float(last_atr)
                     if inst.market == "crypto":
-                        plan = swing_plan(price, float(last_atr))
+                        plan = swing_plan(price, atr_f)
                         if plan is not None:
                             stop, target_px, leverage, stake = plan.stop, plan.target, plan.leverage, plan.stake
                     else:
-                        stop = round(price - ATR_STOP_MULT * float(last_atr), 8)
+                        # Стоп от цены исполнения. Если открытие уже за стопом от закрытия
+                        # сигнальной свечи, вход сорван — сигнал не пишем.
+                        anchor = decision_close - ATR_STOP_MULT * atr_f
+                        if inst.market == "moex" and anchor > 0 and price <= anchor:
+                            continue
+                        stop = round(price - ATR_STOP_MULT * atr_f, 8)
                         if stop <= 0:
                             stop = None
                 sig = Signal(
-                    inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop,
+                    inst.market, inst.symbol, tf, strat.id, side, decision_ts, price, stop,
                     params=params, strategy_version=strategy_version(strat, params),
-                    target=target_px, leverage=leverage, stake=stake,
+                    target=target_px, leverage=leverage, stake=stake, fill_at=fill_at,
                 )
                 if self._store.insert(sig):
                     new.append(sig)

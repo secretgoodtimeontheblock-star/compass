@@ -14,7 +14,7 @@ from compass.api.app import create_app
 from compass.models import Instrument
 from compass.notify import TelegramNotifier, format_digest
 from compass.signals import Signal, in_quiet_hours, signal_expires_at, signal_status
-from tests.conftest import DAY, Env, day_candles
+from tests.conftest import DAY, Env, day_candles, with_next_open
 
 HOUR = 3_600_000
 BREAKOUT = [10.0] * 25 + [12.0]
@@ -23,7 +23,7 @@ Q = {"enabled": True, "from": "22:00", "to": "08:00"}
 
 def watch(env: Env, symbol: str = "XYZ") -> None:
     env.services.watchlist.add(Instrument(symbol, symbol, "moex"))
-    env.adapter.data[symbol] = day_candles(BREAKOUT)
+    env.adapter.data[symbol] = with_next_open(day_candles(BREAKOUT))
 
 
 def client(env: Env) -> TestClient:

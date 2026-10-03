@@ -14,7 +14,7 @@ from compass.models import Instrument
 from compass.plans import Plan, PlanStore, review
 from compass.strategies import STRATEGIES, strategy_version
 from compass.validation import ENGINE_VERSION
-from tests.conftest import DAY, Env, day_candles
+from tests.conftest import DAY, Env, day_candles, with_next_open
 
 BREAKOUT = [10.0] * 45 + [12.0]
 
@@ -48,7 +48,7 @@ def test_strategy_version_is_stable_and_sensitive_to_params_and_revision() -> No
 
 def test_signal_and_backtest_carry_the_same_strategy_version(env: Env) -> None:
     env.services.watchlist.add(Instrument("XYZ", "XYZ", "moex"))
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = len(BREAKOUT) * DAY + 1
     env.services.settings.update(
         {"instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 5, "exit": 3}}}}
@@ -126,7 +126,7 @@ def test_plan_validation_errors_are_422(env: Env) -> None:
 
 def test_plan_from_signal_inherits_strategy_version_and_checks_instrument(env: Env) -> None:
     env.services.watchlist.add(Instrument("XYZ", "XYZ", "moex"))
-    env.adapter.data["XYZ"] = day_candles(BREAKOUT)
+    env.adapter.data["XYZ"] = with_next_open(day_candles(BREAKOUT))
     env.now[0] = len(BREAKOUT) * DAY + 1
     env.services.settings.update(
         {"instrument_strategies": {"moex|XYZ": {"strategy": "donchian", "params": {"entry": 5, "exit": 3}}}}

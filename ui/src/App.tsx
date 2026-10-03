@@ -740,7 +740,8 @@ export default function App() {
 
 function notifyNew(s: Signal, push: (title: string, text: string) => void) {
   const title = `${s.side === "buy" ? "Сигнал на вход" : "Сигнал на выход"}: ${s.symbol}`;
-  const text = `${s.tf}, цена закрытия ${fmtPrice(s.price)}`;
+  const priceLabel = s.fill_at === "next_open" ? "открытие следующей свечи" : "цена закрытия";
+  const text = `${s.tf}, ${priceLabel} ${fmtPrice(s.price)}`;
   push(title, text);
   // системное уведомление — только если пользователь уже разрешил (мы разрешение не выпрашиваем)
   try {
