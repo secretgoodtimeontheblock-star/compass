@@ -10,14 +10,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from compass import discipline, execution, glossary
 from compass.ai import prompts
 from compass.ai.providers import AiError, AiNotReady
 from compass.ai.service import AiResult
-from compass import discipline, execution, glossary
-from compass.backtest import backtest
 from compass.api.schemas import BacktestRequest
+from compass.backtest import backtest
 from compass.markets.base import MarketError
-from compass.models import closed_candles
+from compass.models import closed_candles, feed_delay_s
+from compass.signals import signal_status
 from compass.strategies import STRATEGIES, candles_to_df
 
 if TYPE_CHECKING:
@@ -105,9 +106,11 @@ def register_ai_routes(app: FastAPI, svc: Services, hooks: dict) -> None:
         acc = svc.accounts.get(sig.market) if svc.accounts else None
         snapshot = metrics = None
         warning = None
+        source = None
         try:  # без свежих данных объяснение остаётся, просто беднее
             result = svc.cache.get(sig.market, sig.symbol, sig.tf, 1000)
             candles = closed_candles(result.candles, sig.tf, svc.now_ms())
+            source = result.source or None
             warning = prompts.STALE_WARNING if result.stale else None
             snapshot = prompts.snapshot_facts(candles[-300:], sig.tf, sig.market)
             if len(candles) >= 30:
@@ -125,7 +128,13 @@ def register_ai_routes(app: FastAPI, svc: Services, hooks: dict) -> None:
                 "в объяснении и метриках использованы параметры по умолчанию."
             )
             warning = f"{warning} {note}" if warning else note
-        prompt = prompts.explain_signal(sig, strat, params, snapshot, metrics, acc.capital if acc else None, acc.risk_pct if acc else None)
+        acted = sig.id in (svc.journal.signal_ids() | (svc.plans.signal_ids() if svc.plans else set()))
+        status = signal_status(sig, svc.now_ms(), int(svc.settings.get("signal_valid_bars")), acted)
+        prompt = prompts.explain_signal(
+            sig, strat, params, snapshot, metrics, acc.capital if acc else None, acc.risk_pct if acc else None,
+            status=status, delay_s=feed_delay_s(sig.market, sig.tf),
+            valid_bars=int(svc.settings.get("signal_valid_bars")), source=source, data_note=warning,
+        )
         return _dto(svc.ai.run(prompts.with_data_warning(prompt, warning), req.refresh))
 
     @app.post("/api/ai/review-journal")

@@ -62,6 +62,21 @@ export interface Signal {
   candle_ts: number;
   price: number;
   stop: number | null;
+  target: number | null;
+  leverage: number | null;
+  stake: number | null;
+  swing: {
+    stake: number;
+    leverage: number;
+    target: number;
+    notional: number;
+    qty: number;
+    loss_usdt: number;
+    profit_usdt: number;
+    loss_pct: number;
+    profit_pct: number;
+    risk_note: string;
+  } | null;
   created_at: number; // секунды
   seen: boolean;
   status: "active" | "expired" | "acted" | "dismissed";
@@ -290,6 +305,43 @@ export interface Settings {
   quiet_hours: { enabled: boolean; from: string; to: string };
   paused_instruments: string[];
   experience_level: ExperienceLevel;
+  crypto_exchange: string;
+  crypto_fallback: string;
+}
+
+export interface CryptoBrief {
+  symbol: string;
+  exchange: string | null;
+  currency: string | null;
+  profile: { history_days: number; median_quote_volume: number | null; bars: number; warnings: string[] };
+  btc: { regime: string; change_20d_pct: number | null; note: string };
+  btc_correlation: number | null;
+  btc_link: string | null;
+  spread: { bid: number; ask: number; spread_pct: number } | null;
+  warnings: string[];
+  education: string[];
+  rub: { usd_rub: number; as_of: string; source: string; assumption: string } | null;
+  fee_note: string;
+}
+
+export interface CryptoExchanges {
+  options: string[];
+  active: string | null;
+  fallback: string | null;
+  live_stream: boolean;
+  note: string;
+}
+
+export interface DcaResult {
+  parts: number;
+  cash_each: number;
+  fee_pct: number;
+  budget: number;
+  note: string;
+  qty?: number;
+  avg_price?: number | null;
+  value?: number;
+  pnl?: number;
 }
 
 export type ExperienceLevel = "beginner" | "trader" | "researcher";

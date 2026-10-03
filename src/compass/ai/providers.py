@@ -84,9 +84,48 @@ def _version_key(name: str) -> tuple[int, ...] | None:
     return tuple(int(g) if g else 0 for g in m.groups())
 
 
+# В настройках Компаса только эти две модели. Fast-варианты сюда не входят:
+# Composer 2.5 — обычный ответ, Grok 4.7 High — более глубокий разбор тех же фактов.
+CURSOR_MODELS = (
+    ModelInfo("composer-2.5", "Composer 2.5"),
+    ModelInfo("grok-4.7-high", "Grok 4.7 High"),
+)
+_FAST_ALIASES = {"composer-2.5-fast": "composer-2.5", "grok-4.7-high-fast": "grok-4.7-high"}
+
+
+def cursor_session_token() -> str | None:
+    """Токен уже открытого Cursor на этом компьютере. В базу Компаса и в логи не пишется."""
+    if os.environ.get("CURSOR_AUTH_TOKEN") or os.environ.get("CURSOR_API_KEY"):
+        return None
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    db = Path(appdata) / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    if not db.is_file():
+        return None
+    import sqlite3
+
+    try:
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        row = con.execute("SELECT value FROM ItemTable WHERE key = ?", ("cursorAuth/accessToken",)).fetchone()
+        con.close()
+    except sqlite3.Error:
+        return None
+    token = row[0] if row else None
+    if not isinstance(token, str) or len(token) < 20:
+        return None
+    return token
+
+
 def locate_cursor_agent() -> list[str] | None:
     """Префикс команды для запуска Cursor CLI без посредников или None, если не найден."""
-    shim = shutil.which("cursor-agent")
+    shim = shutil.which("cursor-agent") or shutil.which("agent")
+    if not shim and sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            installed = Path(local) / "cursor-agent" / "cursor-agent.cmd"
+            if installed.is_file():
+                shim = str(installed)
     if not shim:
         return None
     if sys.platform != "win32":
@@ -108,7 +147,7 @@ class CursorProvider:
     id = "cursor"
     name = "Cursor CLI"
     cloud = True
-    default_model = "auto"
+    default_model = "composer-2.5"
 
     def __init__(
         self,
@@ -126,6 +165,9 @@ class CursorProvider:
             raise AiNotReady("Cursor CLI не найден. Установите его и выполните вход (cursor-agent login).", "unavailable")
         self._workdir.mkdir(parents=True, exist_ok=True)  # пустая папка: агенту нечего читать
         env = {**os.environ, "CURSOR_INVOKED_AS": "cursor-agent", "NO_COLOR": "1"}
+        token = cursor_session_token()
+        if token and "CURSOR_AUTH_TOKEN" not in env and "CURSOR_API_KEY" not in env:
+            env["CURSOR_AUTH_TOKEN"] = token
         env.setdefault("NODE_COMPILE_CACHE", str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "cursor-compile-cache"))
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0  # без мигающей консоли
         try:
@@ -156,6 +198,13 @@ class CursorProvider:
         text = (r.stdout + r.stderr).lower()
         if r.returncode == 0 and "logged in" in text:
             return True, ""
+        # Сессия редактора не проходит команду status, но с тем же токеном список моделей открывается.
+        try:
+            listed = self._exec(["--list-models"], 60)
+        except AiError as e:
+            return False, str(e)
+        if listed.returncode == 0 and "composer-2.5" in listed.stdout:
+            return True, ""
         return False, "Нет входа в Cursor: выполните `cursor-agent login`"
 
     def models(self) -> list[ModelInfo]:
@@ -170,10 +219,14 @@ class CursorProvider:
             m = re.match(r"^([A-Za-z0-9._:/\[\],=\-]+) - (.+)$", line)
             if m and MODEL_ID_RE.match(m.group(1)):
                 out.append(ModelInfo(m.group(1), m.group(2).replace("(current, default)", "").strip()))
-        self._models_cache = (time.monotonic(), out)
-        return out
+        allowed = {m.id for m in CURSOR_MODELS}
+        by_id = {m.id: m for m in out if m.id in allowed}
+        chosen = [by_id.get(m.id, m) for m in CURSOR_MODELS]
+        self._models_cache = (time.monotonic(), chosen)
+        return chosen
 
     def ask(self, system: str, prompt: str, model: str) -> str:
+        model = _FAST_ALIASES.get(model, model)
         model = check_model_id(model or self.default_model)
         full = (
             f"ИНСТРУКЦИИ:\n{system}\n\n"

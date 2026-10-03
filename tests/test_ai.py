@@ -117,9 +117,16 @@ def test_cursor_takes_last_json_line_ignoring_noise(tmp_path: Path) -> None:
 
 
 def test_cursor_models_and_availability(tmp_path: Path) -> None:
-    listing = "Available models\n\nauto - Auto (current, default)\ngrok-4.7-low-fast - Grok 4.7  Low Fast\u200b\u200b\nмусорная строка\n--evil - x\n"
+    listing = (
+        "Available models\n\nauto - Auto (current, default)\n"
+        "composer-2.5-fast - Composer 2.5 Fast\n"
+        "composer-2.5 - Composer 2.5 (current, default)\n"
+        "grok-4.7-high-fast - Grok 4.7 High Fast\u200b\u200b\n"
+        "grok-4.7-high - Grok 4.7 High\n"
+        "мусорная строка\n--evil - x\n"
+    )
     p = cursor(run=lambda *a, **k: completed(listing), tmp=tmp_path)
-    assert [(m.id, m.label) for m in p.models()] == [("auto", "Auto"), ("grok-4.7-low-fast", "Grok 4.7  Low Fast")]
+    assert [(m.id, m.label) for m in p.models()] == [("composer-2.5", "Composer 2.5"), ("grok-4.7-high", "Grok 4.7 High")]
 
     assert cursor(run=lambda *a, **k: completed("✓ Logged in as x"), tmp=tmp_path).available() == (True, "")
     ok, why = cursor(run=lambda *a, **k: completed("Not logged in", code=1), tmp=tmp_path).available()
@@ -389,7 +396,8 @@ def test_explain_signal_prompt_carries_computed_facts_and_rules() -> None:
     metrics = {"total_return_pct": 12.06, "buy_hold_return_pct": 17.33, "max_drawdown_pct": -15.69, "trades": 10, "win_rate_pct": 60.0, "candles": 1000}
     p = prompts.explain_signal(sample_signal(), s, s.resolve(), "RSI14: 55.1", metrics, 100_000.0, 1.0)
     assert "272.45" in p.facts and "260.1" in p.facts and "RSI14: 55.1" in p.facts and "12.06" in p.facts
-    assert "ТОЛЬКО факты" in p.system and "не давай инвестиционных рекомендаций" in p.system.lower()
+    assert "статус сигнала: active" in p.facts and "задержка ленты" in p.facts
+    assert "только из блока данные" in p.system.lower() and "не давай инвестиционных рекомендаций" in p.system.lower()
     assert p.audit and p.task == "explain_signal"
     assert "стоп" not in prompts.explain_signal(sample_signal("exit"), s, s.resolve(), None, None, 1.0, 1.0).facts.lower().replace("стоп-", "")
 

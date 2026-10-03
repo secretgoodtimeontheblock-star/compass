@@ -5,7 +5,7 @@ import { useApi } from "../lib/use-api";
 import type { Candle, Instrument, JournalEntry, ReplaySession } from "../types";
 import { PriceChart } from "./PriceChart";
 
-const OVERLAYS = { sma20: false, sma50: false, volume: false };
+const OVERLAYS = { sma20: false, sma50: false, volume: false, stops: false };
 const REASON: Record<string, string> = { order: "по заявке", stop: "стоп", gap_stop: "стоп с гэпом" };
 
 interface Props {

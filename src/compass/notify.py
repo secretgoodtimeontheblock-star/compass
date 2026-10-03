@@ -12,6 +12,7 @@ import httpx
 from compass.models import feed_delay_s
 from compass.signals import Signal
 from compass.strategies import STRATEGIES
+from compass.swing import outcome as swing_outcome
 
 log = logging.getLogger("compass.notify")
 
@@ -24,6 +25,15 @@ def format_signal(s: Signal) -> str:
         head = f"🟢 Сигнал на ВХОД: {s.symbol} ({s.tf})"
         stop = f"\nОриентир стопа: {s.stop:g}" if s.stop else ""
         body = f"Цена закрытия: {s.price:g}{stop}"
+        swing = swing_outcome(s.price, s.stop, s.target, s.leverage, s.stake)
+        if swing:
+            body += (
+                f"\nМаржа: {swing['stake']:g} USDT, плечо {swing['leverage']:g}×, объём {swing['notional']:g} USDT"
+                f"\nЦель: {s.target:g} (около +{swing['profit_pct']:g}% маржи, +{swing['profit_usdt']:g} USDT)"
+                f"\nПри стопе: около −{swing['loss_pct']:g}% маржи (−{swing['loss_usdt']:g} USDT)"
+                f"\n{swing['risk_note']}"
+                "\nДержать до цели или стопа. Маржа изолированная: сделка забирает только эти деньги."
+            )
     else:
         head = f"🔴 Сигнал на ВЫХОД: {s.symbol} ({s.tf})"
         body = f"Цена закрытия: {s.price:g}"
@@ -119,5 +129,14 @@ class CompositeNotifier:
                 else:
                     for s in signals:
                         n.send(s)
+            except Exception:
+                log.exception("Сбой канала уведомлений %s", type(n).__name__)
+
+    def send_text(self, text: str) -> None:
+        for n in self._notifiers:
+            try:
+                post = getattr(n, "send_text", None)
+                if post is not None:
+                    post(text)
             except Exception:
                 log.exception("Сбой канала уведомлений %s", type(n).__name__)

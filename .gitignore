@@ -13,3 +13,5 @@ src/compass/static/
 /data/
 *.sqlite3
 .env
+# локальный телеграм-бот: не из репозитория Compass, pull его не должен затирать
+/local/

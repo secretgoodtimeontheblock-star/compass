@@ -12,6 +12,7 @@ from typing import Any
 
 from compass.ai.providers import MODEL_ID_RE
 from compass.db import Connection
+from compass.markets.crypto import CRYPTO_EXCHANGES
 from compass.strategies import STRATEGIES
 
 AI_PROVIDERS = ("off", "cursor", "claude", "ollama")
@@ -23,7 +24,7 @@ DEFAULTS: dict[str, Any] = {
     "risk_pct": 1.0,  # максимум потерь на сделку, % капитала
     "scan_interval_min": 15,  # как часто искать сигналы
     "tf_moex": "1d",
-    "tf_crypto": "4h",
+    "tf_crypto": "1d",
     "ai_provider": "off",  # off | cursor | claude | ollama
     "ai_models": {},  # провайдер → выбранная модель; пусто — модель по умолчанию у провайдера
     # провайдер, которому пользователь разрешил отправку данных (для облачных обязательно)
@@ -39,6 +40,9 @@ DEFAULTS: dict[str, Any] = {
     "paused_instruments": [],
     # сколько возможностей показывать в интерфейсе; движок и расчёты у всех уровней одни и те же
     "experience_level": "beginner",
+    # пустая основная биржа — та, с которой процесс запущен (COMPASS_CRYPTO_EXCHANGE)
+    "crypto_exchange": "",
+    "crypto_fallback": "bybit",
 }
 
 
@@ -63,6 +67,11 @@ class Settings:
         if unknown:
             raise ValueError(f"Неизвестные настройки: {', '.join(sorted(unknown))}")
         clean = {k: self._validate(k, v) for k, v in changes.items()}
+        current = self.all()
+        ex = clean.get("crypto_exchange", current["crypto_exchange"])
+        fb = clean.get("crypto_fallback", current["crypto_fallback"])
+        if ex and fb and ex == fb:
+            raise ValueError("Запасная биржа должна отличаться от основной")
         with self._lock, self._conn:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO settings VALUES (?, ?)",
@@ -85,6 +94,8 @@ class Settings:
             "quiet_hours": _quiet_hours,
             "paused_instruments": _paused,
             "experience_level": lambda v: _choice(v, "Уровень", EXPERIENCE_LEVELS),
+            "crypto_exchange": _crypto_exchange,
+            "crypto_fallback": _crypto_exchange,
         }
         return checks[key](value)
 
@@ -173,6 +184,14 @@ def _quiet_hours(v: Any) -> dict[str, Any]:
     if out["enabled"] and out["from"] == out["to"]:
         raise ValueError("Тихие часы: начало и конец не должны совпадать")
     return out
+
+
+def _crypto_exchange(v: Any) -> str:
+    if v == "":
+        return ""
+    if not isinstance(v, str) or v not in CRYPTO_EXCHANGES:
+        raise ValueError(f"Биржа крипты — пусто или одна из: {', '.join(CRYPTO_EXCHANGES)}")
+    return v
 
 
 def _paused(v: Any) -> list[str]:

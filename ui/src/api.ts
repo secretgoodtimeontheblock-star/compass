@@ -32,6 +32,9 @@ import type {
   ScanResponse,
   Settings,
   Signal,
+  CryptoBrief,
+  CryptoExchanges,
+  DcaResult,
   Strategy,
   WatchStatus,
   WeekAccount,
@@ -150,6 +153,10 @@ export const api = {
   day: () => request<DayResponse>("/api/day"),
   settings: () => request<Settings>("/api/settings"),
   saveSettings: (s: Partial<Settings>) => request<Settings>("/api/settings", json("PUT", s)),
+  cryptoBrief: (symbol: string) => request<CryptoBrief>(`/api/crypto/brief?${qs({ symbol })}`),
+  cryptoExchanges: () => request<CryptoExchanges>("/api/crypto/exchanges"),
+  dca: (b: { budget: number; parts: number; fee_pct?: number; prices?: number[] }) =>
+    request<DcaResult>("/api/crypto/dca", json("POST", b)),
 
   aiStatus: () => request<AiStatus>("/api/ai/status"),
   aiProviders: () => request<AiProviderInfo[]>("/api/ai/providers"),

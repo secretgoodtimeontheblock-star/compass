@@ -81,7 +81,7 @@ function SignalCard({
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState<PlanDto>();
-  const [target, setTarget] = useState("");
+  const [target, setTarget] = useState(s.target != null ? String(s.target) : "");
   const [reason, setReason] = useState("Вход по сигналу");
   const buy = s.side === "buy";
 
@@ -172,8 +172,34 @@ function SignalCard({
             <dd>{s.stop != null ? fmtPrice(s.stop) : "—"}</dd>
           </>
         )}
+        {buy && s.swing && (
+          <>
+            <dt>Маржа в сделке</dt>
+            <dd>{fmtNum(s.swing.stake, 0)} USDT</dd>
+            <dt>Плечо</dt>
+            <dd>{fmtNum(s.swing.leverage, 1)}×</dd>
+            <dt>Объём позиции</dt>
+            <dd>
+              {fmtNum(s.swing.notional)} USDT · {fmtNum(s.swing.qty, 6)}
+            </dd>
+            <dt>Цель</dt>
+            <dd>
+              {fmtPrice(s.swing.target)} · +{fmtNum(s.swing.profit_pct, 0)}% (+{fmtNum(s.swing.profit_usdt)} USDT)
+            </dd>
+            <dt>Потеря при стопе</dt>
+            <dd>
+              −{fmtNum(s.swing.loss_pct, 0)}% (−{fmtNum(s.swing.loss_usdt)} USDT)
+            </dd>
+          </>
+        )}
       </dl>
-      {buy && s.stop != null && !risk && (
+      {buy && s.swing && (
+        <p className="caveat" style={{ marginTop: 6 }}>
+          {s.swing.risk_note} Дневной свинг: держать до цели или стопа. В сделку ставятся {fmtNum(s.swing.stake, 0)} USDT
+          изолированной маржи.
+        </p>
+      )}
+      {buy && s.stop != null && !s.swing && !risk && (
         <button className="btn small" style={{ marginTop: 8 }} disabled={busy} onClick={calc}>
           {busy ? "Считаем…" : "Сколько купить?"}
         </button>

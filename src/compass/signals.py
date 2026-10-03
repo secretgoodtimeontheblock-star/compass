@@ -24,11 +24,16 @@ from compass.markets.base import MarketError
 from compass.models import TIMEFRAME_MS, closed_candles
 from compass.settings import Settings, profile_key
 from compass.strategies import STRATEGIES, candles_to_df, strategy_version
+from compass.swing import STOP_ATR_MULT, swing_plan
 from compass.watchlist import Watchlist
 
 log = logging.getLogger("compass.signals")
 
-ATR_STOP_MULT = 2.0  # ориентир стопа: цена входа − 2·ATR(14)
+ATR_STOP_MULT = STOP_ATR_MULT  # ориентир стопа акций: цена входа − 2·ATR(14)
+_SIGNAL_SELECT = (
+    "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, "
+    "strategy_version, notified_at, dismissed_at, target, leverage, stake FROM signals "
+)
 HISTORY = 300  # свечей для расчёта — с запасом над прогревом любой стратегии
 
 
@@ -49,6 +54,9 @@ class Signal:
     strategy_version: str | None = None  # см. strategies.strategy_version; None — сигнал старого образца
     notified_at: int | None = None  # None — внешнее уведомление ещё не ушло (например, тихие часы)
     dismissed_at: int | None = None  # пользователь отклонил сигнал
+    target: float | None = None  # цель свинга; None — сигнал без плана на 100 USDT
+    leverage: float | None = None
+    stake: float | None = None  # изолированная маржа, USDT
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +67,8 @@ class ScanResult:
 
 def _row_to_signal(r: tuple) -> Signal:
     return Signal(*r[:10], seen=bool(r[10]), params=json.loads(r[11]) if r[11] else None,
-                  strategy_version=r[12], notified_at=r[13], dismissed_at=r[14])
+                  strategy_version=r[12], notified_at=r[13], dismissed_at=r[14],
+                  target=r[15], leverage=r[16], stake=r[17])
 
 
 class SignalStore:
@@ -72,10 +81,12 @@ class SignalStore:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT OR IGNORE INTO signals "
-                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params, strategy_version) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "(market, symbol, tf, strategy, side, candle_ts, price, stop, created_at, params, strategy_version, "
+                "target, leverage, stake) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (s.market, s.symbol, s.tf, s.strategy, s.side, s.candle_ts, s.price, s.stop, int(time.time()),
-                 None if s.params is None else json.dumps(s.params, sort_keys=True), s.strategy_version),
+                 None if s.params is None else json.dumps(s.params, sort_keys=True), s.strategy_version,
+                 s.target, s.leverage, s.stake),
             )
         return cur.rowcount == 1
 
@@ -95,32 +106,21 @@ class SignalStore:
         if symbol:
             where.append("symbol = ?")
             args.append(symbol)
-        sql = (
-            "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, strategy_version, "
-                "notified_at, dismissed_at "
-            "FROM signals " + (f"WHERE {' AND '.join(where)} " if where else "") + "ORDER BY id DESC LIMIT ?"
-        )
+        sql = _SIGNAL_SELECT + (f"WHERE {' AND '.join(where)} " if where else "") + "ORDER BY id DESC LIMIT ?"
         with self._lock:
             rows = self._conn.execute(sql, (*args, limit)).fetchall()
         return [_row_to_signal(r) for r in rows]
 
     def get(self, signal_id: int) -> Signal | None:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, strategy_version, "
-                "notified_at, dismissed_at "
-                "FROM signals WHERE id = ?",
-                (signal_id,),
-            ).fetchone()
+            row = self._conn.execute(_SIGNAL_SELECT + "WHERE id = ?", (signal_id,)).fetchone()
         return _row_to_signal(row) if row else None
 
     def pending_notification(self) -> list[Signal]:
         """Сигналы, о которых ещё не уведомляли и которые пользователь не отклонил."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT market, symbol, tf, strategy, side, candle_ts, price, stop, id, created_at, seen, params, "
-                "strategy_version, notified_at, dismissed_at FROM signals "
-                "WHERE notified_at IS NULL AND dismissed_at IS NULL ORDER BY id"
+                _SIGNAL_SELECT + "WHERE notified_at IS NULL AND dismissed_at IS NULL ORDER BY id"
             ).fetchall()
         return [_row_to_signal(r) for r in rows]
 
@@ -266,13 +266,21 @@ class SignalEngine:
                     continue
                 price = float(df["close"].iloc[-1])
                 side = "buy" if cur == 1 else "exit"
-                stop = None
-                if side == "buy" and not math.isnan(last_atr):
-                    stop = round(price - ATR_STOP_MULT * float(last_atr), 8)
-                    if stop <= 0:
-                        stop = None
-                sig = Signal(inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop,
-                             params=params, strategy_version=strategy_version(strat, params))
+                stop = target_px = leverage = stake = None
+                if side == "buy" and not math.isnan(float(last_atr)) and float(last_atr) > 0:
+                    if inst.market == "crypto":
+                        plan = swing_plan(price, float(last_atr))
+                        if plan is not None:
+                            stop, target_px, leverage, stake = plan.stop, plan.target, plan.leverage, plan.stake
+                    else:
+                        stop = round(price - ATR_STOP_MULT * float(last_atr), 8)
+                        if stop <= 0:
+                            stop = None
+                sig = Signal(
+                    inst.market, inst.symbol, tf, strat.id, side, int(df["ts"].iloc[-1]), price, stop,
+                    params=params, strategy_version=strategy_version(strat, params),
+                    target=target_px, leverage=leverage, stake=stake,
+                )
                 if self._store.insert(sig):
                     new.append(sig)
             self._store.set_state(inst.market, inst.symbol, "ok", "", now_s)

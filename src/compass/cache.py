@@ -61,9 +61,13 @@ class CandleCache:
                     raise
                 stale = True
             else:
+                # запасная биржа могла сменить source_id прямо во время запроса
+                source = getattr(adapter, "source_id", market)
                 with self._lock:
                     self._upsert(source, market, symbol, tf, got)
         with self._lock:
+            if not stale:
+                source = getattr(adapter, "source_id", source)
             return CandlesResult(
                 self._read(source, market, symbol, tf, limit), stale,
                 self._fetched_at(source, market, symbol, tf), source,

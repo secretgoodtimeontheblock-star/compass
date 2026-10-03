@@ -66,7 +66,7 @@ export default function App() {
   const [selSymbol, setSelSymbol] = useState<Record<string, string>>(() => readJson("selected", {}));
   const [tfOverride, setTfOverride] = useState<Record<string, string>>({});
   const [overlays, setOverlays] = useState<Overlays>(() =>
-    readJson("overlays", { sma20: false, sma50: false, volume: true }),
+    readJson("overlays", { sma20: false, sma50: false, volume: true, stops: false }),
   );
   const [tab, setTab] = useState<Tab>("signals");
   const [rightOpen, setRightOpen] = useState(false);
@@ -144,6 +144,18 @@ export default function App() {
   const markets = marketsApi.data ?? [];
   const settings = settingsOverride ?? settingsApi.data;
 
+  const setSignalWatch = async (i: Instrument, on: boolean) => {
+    const listed = (watchApi.data ?? []).some((x) => x.market === i.market && x.symbol === i.symbol);
+    const key = `${i.market}|${i.symbol}`;
+    const paused = (settings?.paused_instruments ?? []).includes(key);
+    if (on) {
+      if (!listed) await addToWatch(i);
+      else if (paused) await togglePause(i);
+      return;
+    }
+    if (listed && !paused) await togglePause(i);
+  };
+
   const togglePause = async (i: Instrument) => {
     if (!settings) return;
     const key = `${i.market}|${i.symbol}`;
@@ -189,18 +201,6 @@ export default function App() {
     [selected?.market, selected?.symbol],
     60_000,
   );
-  const chartLines = useMemo<ChartLine[]>(
-    () => [
-      ...(levelsApi.data ?? []).map((l) => ({ price: l.price, label: l.label || "уровень", kind: "level" as const })),
-      ...(plansActiveApi.data ?? []).flatMap((p) => [
-        { price: p.entry, label: `План №${p.id}: вход`, kind: "entry" as const },
-        { price: p.stop, label: `План №${p.id}: стоп`, kind: "stop" as const },
-        ...(p.target != null ? [{ price: p.target, label: `План №${p.id}: цель`, kind: "target" as const }] : []),
-      ]),
-    ],
-    [levelsApi.data, plansActiveApi.data],
-  );
-
   const journalApi = useApi(
     selected ? () => api.journal({ market: selected.market, symbol: selected.symbol, mode: journalMode }) : null,
     [selected?.market, selected?.symbol, journalMode],
@@ -212,6 +212,26 @@ export default function App() {
     () => allSignals.filter((s) => s.market === selected?.market && s.symbol === selected?.symbol),
     [allSignals, selected?.market, selected?.symbol],
   );
+  const focusSignal = useMemo(() => {
+    const onTf = chartSignals.filter((s) => s.tf === tf && s.status === "active");
+    return onTf.reduce<Signal | null>((best, s) => (!best || s.candle_ts > best.candle_ts ? s : best), null);
+  }, [chartSignals, tf]);
+  const chartLines = useMemo<ChartLine[]>(() => {
+    const stops = overlays.stops
+      ? chartSignals
+          .filter((s) => s.side === "buy" && s.status === "active" && s.stop != null)
+          .map((s) => ({ price: s.stop as number, label: "Стоп сигнала", kind: "stop" as const }))
+      : [];
+    return [
+      ...stops,
+      ...(levelsApi.data ?? []).map((l) => ({ price: l.price, label: l.label || "уровень", kind: "level" as const })),
+      ...(plansActiveApi.data ?? []).flatMap((p) => [
+        { price: p.entry, label: `План №${p.id}: вход`, kind: "entry" as const },
+        { price: p.stop, label: `План №${p.id}: стоп`, kind: "stop" as const },
+        ...(p.target != null ? [{ price: p.target, label: `План №${p.id}: цель`, kind: "target" as const }] : []),
+      ]),
+    ];
+  }, [overlays.stops, chartSignals, levelsApi.data, plansActiveApi.data]);
 
   // ---- уведомления о новых сигналах (первая загрузка — молча) ----
   const knownIds = useRef<Set<number> | null>(null);
@@ -446,6 +466,29 @@ export default function App() {
                   {label}
                 </label>
               ))}
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Стопы сигналов"
+                  checked={overlays.stops}
+                  onChange={(e) => setOverlays({ ...overlays, stops: e.target.checked })}
+                />
+                Стопы
+              </label>
+              {selected && (
+                <label title="Искать сигналы только по отмеченным котировкам из избранного">
+                  <input
+                    type="checkbox"
+                    aria-label={`Следить за сигналами ${selected.symbol}`}
+                    checked={
+                      items.some((i) => i.market === selected.market && i.symbol === selected.symbol) &&
+                      !(settings?.paused_instruments ?? []).includes(`${selected.market}|${selected.symbol}`)
+                    }
+                    onChange={(e) => void setSignalWatch(selected, e.target.checked)}
+                  />
+                  Сигналы {selected.symbol}
+                </label>
+              )}
             </div>
             <div className="seg" role="group" aria-label="Таймфрейм">
               {(marketInfo?.timeframes ?? []).map((t) => (
@@ -462,6 +505,15 @@ export default function App() {
             onRetry={() => { live.retry(); candlesApi.reload(); }}
           />
           <div className="chart-wrap" id="chart" tabIndex={-1}>
+            {focusSignal && (
+              <div className={`signal-callout ${focusSignal.side === "buy" ? "up" : "down"}`} role="status">
+                <b>{focusSignal.side === "buy" ? "Вход" : "Выход"}</b>
+                <span className="num">{fmtPrice(focusSignal.price)}</span>
+                {focusSignal.side === "buy" && focusSignal.stop != null && (
+                  <span className="muted">стоп {fmtPrice(focusSignal.stop)}</span>
+                )}
+              </div>
+            )}
             {candlesApi.loading && <div className="loading-bar" />}
             {candlesApi.loading && candles.length === 0 && !candlesApi.error && selected && (
               <div className="chart-skeleton" aria-hidden="true">

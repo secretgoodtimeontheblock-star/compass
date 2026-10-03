@@ -3,9 +3,10 @@ import { api } from "../api";
 import { fmtPrice } from "../lib/format";
 import { useApi } from "../lib/use-api";
 import type { AlertDto, Instrument, LevelDto, Market } from "../types";
+import { CryptoDesk } from "./CryptoDesk";
 import { PriceChart } from "./PriceChart";
 
-const OFF = { sma20: false, sma50: false, volume: false };
+const OFF = { sma20: false, sma50: false, volume: false, stops: false };
 
 interface Props {
   instrument: Instrument;
@@ -163,6 +164,7 @@ export function ChartExtras({ instrument, marketInfo, tf, lastPrice, levels, onL
       <p className="caveat" style={{ margin: "2px 0 0" }}>
         Оповещение придёт тостом и в Telegram (если настроен), пока приложение запущено; проверка раз в минуту. Уровни — ваши пометки на графике, приложение не оценивает, удержатся ли они.
       </p>
+      {instrument.market === "crypto" && <CryptoDesk instrument={instrument} lastPrice={lastPrice} />}
       {second && (
         <div style={{ position: "relative", height: 200, marginTop: 6 }}>
           {candles2.error ? (

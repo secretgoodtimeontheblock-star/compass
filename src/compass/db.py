@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _V1 = """
 CREATE TABLE candles (
@@ -262,6 +262,13 @@ CREATE TABLE alerts (
 CREATE INDEX alerts_status ON alerts (status, market, symbol);
 """
 
+# Свинговый план крипто-сигнала: цель, плечо и изолированная маржа. У старых сигналов пусто.
+_V16 = """
+ALTER TABLE signals ADD COLUMN target REAL;
+ALTER TABLE signals ADD COLUMN leverage REAL;
+ALTER TABLE signals ADD COLUMN stake REAL;
+"""
+
 
 class Connection(sqlite3.Connection):
     """Все сервисы делят блокировку соединения, включая чтение и commit/rollback.
@@ -363,4 +370,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if version < 15:
         conn.executescript(_V15)
         conn.execute("PRAGMA user_version = 15")
+        conn.commit()
+    if version < 16:
+        conn.executescript(_V16)
+        conn.execute("PRAGMA user_version = 16")
         conn.commit()

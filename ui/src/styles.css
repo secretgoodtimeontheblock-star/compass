@@ -563,6 +563,29 @@ select:disabled {
   flex: 1;
   min-height: 0;
 }
+.signal-callout {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg) 40%, transparent);
+  animation: signal-arrive 0.9s ease;
+  pointer-events: none;
+}
+.signal-callout.up { border-color: color-mix(in srgb, var(--up) 55%, var(--border)); }
+.signal-callout.down { border-color: color-mix(in srgb, var(--down) 55%, var(--border)); }
+@keyframes signal-arrive {
+  0% { opacity: 0; transform: translateY(-8px); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+  35% { opacity: 1; transform: translateY(0); box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent); }
+  100% { box-shadow: 0 8px 24px color-mix(in srgb, var(--bg) 40%, transparent); }
+}
 .chart-box {
   position: absolute;
   inset: 0;

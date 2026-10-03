@@ -7,9 +7,9 @@ import logging
 import uvicorn
 
 from compass.accounts import AccountStore
-from compass.alerts import AlertEngine, AlertStore, AlertWatcher
 from compass.ai.providers import ClaudeProvider, CursorProvider, OllamaProvider
 from compass.ai.service import AiService
+from compass.alerts import AlertEngine, AlertStore, AlertWatcher
 from compass.api.app import Services, create_app
 from compass.cache import CandleCache
 from compass.config import Config
@@ -37,8 +37,16 @@ def build_services(cfg: Config, background_scan: bool = True) -> Services:
     cache = CandleCache(conn, adapters)
     watchlist = Watchlist(conn)
     settings = Settings(conn, {k: a.timeframes for k, a in adapters.items()})
+    crypto = adapters["crypto"]
+    chosen = settings.get("crypto_exchange") or cfg.crypto_exchange
+    fallback = settings.get("crypto_fallback") or None
+    if fallback == chosen:
+        fallback = "okx" if chosen != "okx" else "binance"
+    if hasattr(crypto, "configure"):
+        crypto.configure(chosen, fallback, cfg.proxy)
     store = SignalStore(conn)
-    engine = SignalEngine(cache, watchlist, settings, store, CompositeNotifier(TelegramNotifier()))
+    notifier = CompositeNotifier(TelegramNotifier())
+    engine = SignalEngine(cache, watchlist, settings, store, notifier)
     providers = {
         "cursor": CursorProvider(cfg.data_dir / "ai-workdir"),
         "claude": ClaudeProvider(),
@@ -46,12 +54,15 @@ def build_services(cfg: Config, background_scan: bool = True) -> Services:
     }
     ai = AiService(providers, settings, conn)
     scanner = BackgroundScanner(engine, settings) if background_scan else None
-    notifier = CompositeNotifier(TelegramNotifier())
     alert_store = AlertStore(conn)
     alert_engine = AlertEngine(cache, alert_store, notifier)
     watcher = AlertWatcher(alert_engine) if background_scan else None
-    live = OkxLive(cache, cfg.proxy) if cfg.crypto_exchange == "okx" else None
-    return Services(adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, scanner, live, PollingLive(cache, adapters), PlanStore(conn), ExperimentLog(conn), AccountStore(conn), ReplayStore(conn), LevelStore(conn), alert_store, alert_engine, watcher)
+    live = OkxLive(cache, cfg.proxy) if crypto.exchange_id == "okx" else None
+    return Services(
+        adapters, cache, watchlist, settings, store, engine, Journal(conn), ai, scanner, live,
+        PollingLive(cache, adapters), PlanStore(conn), ExperimentLog(conn), AccountStore(conn),
+        ReplayStore(conn), LevelStore(conn), alert_store, alert_engine, watcher,
+    )
 
 
 def main() -> None:

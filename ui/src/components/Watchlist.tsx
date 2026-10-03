@@ -66,11 +66,15 @@ export function Watchlist({ market, items, selected, onSelect, onRemove, onQuick
               </button>
               <button
                 className="btn ghost small"
-                aria-pressed={paused.has(`${i.market}|${i.symbol}`)}
-                title="Приостановить поиск сигналов по этому тикеру"
+                aria-pressed={!paused.has(`${i.market}|${i.symbol}`)}
+                title={
+                  paused.has(`${i.market}|${i.symbol}`)
+                    ? "Сигналы по этой котировке не ищутся. Нажмите, чтобы следить"
+                    : "Сигналы по этой котировке ищутся. Нажмите, чтобы выключить"
+                }
                 onClick={() => onTogglePause(i)}
               >
-                {paused.has(`${i.market}|${i.symbol}`) ? "На паузе" : "Пауза"}
+                {paused.has(`${i.market}|${i.symbol}`) ? "Не следим" : "Следим"}
               </button>
               <button
                 className="icon-btn watch-remove"

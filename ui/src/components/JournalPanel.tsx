@@ -122,6 +122,25 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
     }
   };
 
+  const exportTax = async () => {
+    setError(undefined);
+    try {
+      const year = new Date().getFullYear();
+      const market = instrument?.market ?? "crypto";
+      const res = await fetch(`/api/journal/tax.csv?year=${year}&market=${market}`);
+      if (!res.ok) throw new Error("Не удалось выгрузить FIFO");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `compass-fifo-${market}-${year}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось выгрузить FIFO");
+    }
+  };
+
   const showDeleted = async () => {
     setError(undefined);
     try {
@@ -195,11 +214,15 @@ export function JournalPanel({ instrument, entries, positions, mode, onModeChang
         <button className="btn small" onClick={() => void exportCsv()}>
           Экспорт CSV
         </button>
+        <button className="btn small" onClick={() => void exportTax()} title="FIFO по реальным сделкам за текущий год, в валюте котировки">
+          FIFO за год
+        </button>
       </div>
       {open.length === 0 ? (
         <div className="empty" style={{ paddingTop: 4 }}>
           Здесь появятся ваши сделки. Приложение ничего не покупает само: вы совершаете сделку у брокера или
           на бирже и записываете её сюда, чтобы видеть результат и разбирать ошибки.
+          {instrument?.market === "crypto" && " Если биржа списала комиссию в монете, укажите её в USDT: количество монеты × цена сделки."}
         </div>
       ) : (
         <table className="num">

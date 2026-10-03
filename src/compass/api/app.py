@@ -23,12 +23,15 @@ from compass import screener as screener_mod
 from compass.accounts import MARKET_TZ, Account, AccountStore
 from compass.alerts import Alert, AlertEngine, AlertStore, AlertWatcher
 from compass.ai.service import AiService
+from compass.alerts import AlertStore
 from compass.api.ai_routes import register_ai_routes
+from compass.api.crypto_routes import register_crypto_routes
 from compass.api.guard import install_guard
 from compass.api.schemas import BacktestRequest, LabRequest, ValidateRequest
 from compass.api.replay_routes import register_replay_routes
 from compass.backtest import Rules, backtest
 from compass.cache import CandleCache
+from compass.crypto_tools import basket_note, btc_link_note, btc_regime, coin_profile, correlation, quote_warning
 from compass.data_quality import check_candles
 from compass.experiments import Experiment, ExperimentLog, multiple_testing_warning
 from compass.journal import MODES, Entry, Journal
@@ -64,6 +67,7 @@ from compass.signals import (
     signal_status,
 )
 from compass.strategies import STRATEGIES, candles_to_df, strategy_version
+from compass.swing import outcome as swing_outcome
 from compass.validation import (
     apply_sample_rules,
     cost_stress_warning,
@@ -252,7 +256,9 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
 
     def _live_for(market: str):
         if market == "crypto" and svc.live is not None:
-            return svc.live
+            ex = getattr(svc.adapters.get("crypto"), "exchange_id", "okx")
+            if ex == "okx":
+                return svc.live
         return svc.polling if svc.polling is not None and svc.polling.supports(market) else None
 
     @app.get("/api/live")
@@ -717,6 +723,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         d["delay_seconds"] = delay
         # данные приходят позже, чем живёт сигнал: к моменту получения он уже мог устареть
         d["late"] = bool(delay) and delay * 1000 >= TIMEFRAME_MS[s.tf] * ctx["valid"]
+        d["swing"] = swing_outcome(s.price, s.stop, s.target, s.leverage, s.stake)
         return d
 
     @app.get("/api/watch")
@@ -822,13 +829,24 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         available = req.available
         if available is None and snap["free"] is not None:
             available = max(0.0, snap["free"])  # свободные средства с учётом открытых позиций и результата
-        model = execution.model_for(req.market, req.fee_pct, req.slippage_pct, req.spread_pct)
+        is_crypto = req.market == "crypto"
+        spread_pct = req.spread_pct
+        spread = None
+        if is_crypto and spread_pct is None:
+            book = getattr(adapter(req.market), "order_book_spread", None)
+            if book is not None:
+                try:
+                    spread = book(req.symbol)
+                except MarketError:
+                    spread = None
+                if spread:
+                    spread_pct = spread["spread_pct"]
+        model = execution.model_for(req.market, req.fee_pct, req.slippage_pct, spread_pct)
         fee = model.fee_pct
         slip = model.effective_slippage_pct  # проскальзывание + половина спреда: как в бэктесте и на учебном счёте
         bond = info.price_unit == "percent_of_face"
         if bond and not info.face_value:
             raise ValueError("Для облигации не получен номинал: посчитать размер позиции нельзя")
-        is_crypto = req.market == "crypto"
         p = position_size(
             capital,
             risk_pct,
@@ -863,6 +881,13 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
             )
         if info.trading_open is False:
             warnings.append("По данным биржи торги по инструменту сейчас не идут: цена может быть вчерашней.")
+        if is_crypto:
+            warnings.extend(_crypto_warnings(req.symbol, info.currency))
+            if spread:
+                warnings.append(
+                    f"Спред взят из стакана: {spread['spread_pct']:g}% "
+                    f"(bid {spread['bid']:g}, ask {spread['ask']:g}), а не общая цифра для всей крипты."
+                )
         for label, price in (("входа", req.entry), ("стопа", req.stop)):
             if info.price_step and abs(price / info.price_step - round(price / info.price_step)) > 1e-6:
                 warnings.append(f"Цена {label} не кратна шагу цены {info.price_step:g}: биржа её не примет.")
@@ -892,9 +917,41 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
                     f"с каждой стороны (проскальзывание {model.slippage_pct:g}% + половина спреда "
                     f"{model.spread_pct:g}%); ухудшенное исполнение — проскальзывание ×{WORSE_SLIPPAGE_MULT:g}."
                 ),
+                *(
+                    [(
+                        "Комиссия крипты — одна ставка, без тарифа maker/taker и скидки за объём. "
+                        "Если биржа списала её в монете, в журнал пишите сумму в валюте котировки."
+                    )]
+                    if is_crypto else []
+                ),
                 "Приложение ничего не исполняет и не блокирует: лимит — предупреждение.",
             ],
         }
+
+    def _crypto_warnings(symbol: str, currency: str | None) -> list[str]:
+        out: list[str] = []
+        q = quote_warning(currency)
+        if q:
+            out.append(q)
+        try:
+            daily = closed_candles(svc.cache.get("crypto", symbol, "1d", 500).candles, "1d", svc.now_ms())
+        except MarketError:
+            return out
+        out.extend(coin_profile(daily)["warnings"])
+        if symbol.upper().startswith("BTC/"):
+            return out
+        try:
+            btc = closed_candles(svc.cache.get("crypto", "BTC/USDT", "1d", 150).candles, "1d", svc.now_ms())
+        except MarketError:
+            return out
+        regime = btc_regime(btc)
+        if regime["regime"] != "unknown":
+            out.append(regime["note"])
+        corr, overlap = correlation({c.ts: c.close for c in daily}, {c.ts: c.close for c in btc})
+        link = btc_link_note(symbol, corr, overlap)
+        if link and corr is not None and corr >= 0.7:
+            out.append(link)
+        return out
 
     @app.post("/api/risk")
     def risk(req: RiskRequest) -> dict:
@@ -956,11 +1013,15 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
     def day_panel() -> dict:
         """Панель дня по каждому счёту отдельно: без сложения рублей и USDT."""
         snaps = [account_snapshot(a) for a in accounts_store().list()]
+        notes = ["Наблюдение и сигналы работают только при запущенном приложении."]
+        basket = _btc_basket_note(snaps)
+        if basket:
+            notes.append(basket)
         return {
             "accounts": snaps,
             "unseen_signals": len(svc.signals.list(500, True)),
             "problem_sources": [x for x in svc.signals.states() if x["status"] in ("stale", "error")],
-            "notes": ["Наблюдение и сигналы работают только при запущенном приложении."],
+            "notes": notes,
         }
 
     @app.get("/api/cockpit")
@@ -978,6 +1039,24 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         active = [d for d in (signal_dto(s, ctx) for s in svc.signals.list(200)) if d["status"] == "active"]
         problems = [x for x in svc.signals.states() if x["status"] in ("stale", "error")]
         return cockpit_mod.build(accounts, plans, active, watch_status(), problems, svc.now_ms())
+
+    def _btc_basket_note(snaps: list[dict]) -> str | None:
+        crypto = next((s for s in snaps if s["market"] == "crypto"), None)
+        if crypto is None:
+            return None
+        symbols = [p["symbol"] for p in crypto["positions"] if not str(p["symbol"]).upper().startswith("BTC/")]
+        if len(symbols) < 2 or "crypto" not in svc.adapters:
+            return None
+        try:
+            btc = {c.ts: c.close for c in closed_candles(svc.cache.get("crypto", "BTC/USDT", "1d", 150).candles, "1d", svc.now_ms())}
+            corrs = []
+            for sym in symbols:
+                series = {c.ts: c.close for c in closed_candles(svc.cache.get("crypto", sym, "1d", 150).candles, "1d", svc.now_ms())}
+                corr, _n = correlation(series, btc)
+                corrs.append(corr)
+        except MarketError:
+            return None
+        return basket_note(corrs, symbols)
 
     @app.get("/api/review/week")
     def review_week(days: int = Query(7, ge=1, le=31)) -> dict:
@@ -1199,7 +1278,18 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
 
     @app.put("/api/settings")
     def settings_put(changes: dict) -> dict:
-        return svc.settings.update(changes)
+        updated = svc.settings.update(changes)
+        if {"crypto_exchange", "crypto_fallback"} & set(changes):
+            _apply_crypto_exchange(updated)
+        return updated
+
+    def _apply_crypto_exchange(updated: dict) -> None:
+        a = svc.adapters.get("crypto")
+        configure = getattr(a, "configure", None)
+        if configure is None:
+            return
+        ex = updated["crypto_exchange"] or getattr(a, "boot_exchange", None) or "okx"
+        configure(ex, updated["crypto_fallback"] or None, getattr(a, "proxy", None))
 
     # --- журнал сделок ---
 
@@ -1326,6 +1416,7 @@ def create_app(svc: Services, session_token: str | None = None) -> FastAPI:
         "changed": changed_facts, "discipline": discipline_data, "compare": compare_data,
     })
     register_replay_routes(app, svc, instrument_info, adapter, CRYPTO_QTY_STEP)
+    register_crypto_routes(app, svc)
 
     # Интерфейс — последним: маршруты /api/* должны матчиться раньше статики.
     if STATIC_DIR.is_dir():

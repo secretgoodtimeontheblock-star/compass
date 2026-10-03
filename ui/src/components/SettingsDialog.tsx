@@ -19,6 +19,8 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
     tf_moex: settings.tf_moex,
     tf_crypto: settings.tf_crypto,
     signal_valid_bars: String(settings.signal_valid_bars ?? 3),
+    crypto_exchange: settings.crypto_exchange ?? "",
+    crypto_fallback: settings.crypto_fallback ?? "bybit",
   });
   const [level, setLevel] = useState<ExperienceLevel>(settings.experience_level ?? "beginner");
   const [quiet, setQuiet] = useState(settings.quiet_hours ?? { enabled: false, from: "22:00", to: "08:00" });
@@ -64,6 +66,8 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
           ai_provider: aiProvider,
           ai_models: aiModels,
           experience_level: level,
+          crypto_exchange: draft.crypto_exchange,
+          crypto_fallback: draft.crypto_fallback,
         }),
       );
       onClose();
@@ -134,6 +138,28 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
               </label>
             </>
           )}
+          <label className="field">
+            <span>Биржа крипты</span>
+            <select value={draft.crypto_exchange} onChange={(e) => setDraft({ ...draft, crypto_exchange: e.target.value })}>
+              <option value="">Как при запуске</option>
+              {["okx", "bybit", "binance", "kucoin", "gate"].map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Запасная биржа</span>
+            <select value={draft.crypto_fallback} onChange={(e) => setDraft({ ...draft, crypto_fallback: e.target.value })}>
+              <option value="">Нет</option>
+              {["okx", "bybit", "binance", "kucoin", "gate"].map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
+          </label>
+          <p className="muted small-text" style={{ margin: 0 }}>
+            Если основная биржа не отвечает, свечи читаются с запасной и источник переключается до перезапуска.
+            Живой поток есть только у OKX. Только спот.
+          </p>
           <label className="field full">
             <span>Как часто искать сигналы, минут</span>
             <input
@@ -169,7 +195,7 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
               value={aiProvider === "off" ? "" : (aiModels[aiProvider] ?? "")}
               onChange={(e) => aiProvider !== "off" && setAiModels({ ...aiModels, [aiProvider]: e.target.value })}
             >
-              <option value="">По умолчанию</option>
+              <option value="">{aiProvider === "cursor" ? "Composer 2.5" : "По умолчанию"}</option>
               {aiProvider !== "off" && aiModels[aiProvider] && !modelList.some((m) => m.id === aiModels[aiProvider]) && (
                 <option value={aiModels[aiProvider]}>{aiModels[aiProvider]}</option>
               )}
@@ -184,7 +210,7 @@ export function SettingsDialog({ settings, markets, onClose, onSaved }: Props) {
         {modelsError && <div className="notice" style={{ margin: "8px 0 0" }}>{modelsError}</div>}
         <p className="muted small-text">
           {aiProvider === "off" && "AI выключен: приложение работает без него."}
-          {aiProvider === "cursor" && "Cursor CLI работает в режиме «только чтение». Ответ занимает 15–30 секунд, нужен вход: cursor-agent login. Данные уходят в облако Cursor."}
+          {aiProvider === "cursor" && "Модель по умолчанию — Composer 2.5. Второй вариант — Grok 4.7 High: тот же разбор фактов, дольше и глубже. Быстрые варианты этих моделей не используются. Ответ занимает от 15 секунд, данные уходят в облако Cursor."}
           {aiProvider === "claude" && "Нужен ключ ANTHROPIC_API_KEY в окружении (или вход через ant auth login). Данные уходят в Anthropic; оплата по тарифам API."}
           {aiProvider === "ollama" && "Работает локально, данные не покидают компьютер. Нужна запущенная Ollama и скачанная модель."}
           {aiProvider !== "off" && " Цены и размеры позиций считает приложение, а не модель."}

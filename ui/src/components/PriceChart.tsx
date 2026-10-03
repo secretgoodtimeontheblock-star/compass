@@ -27,6 +27,7 @@ export interface Overlays {
   sma20: boolean;
   sma50: boolean;
   volume: boolean;
+  stops: boolean;
 }
 
 interface Props {
@@ -172,17 +173,22 @@ export function PriceChart({ candles, tf, signals, trades, overlays, theme, rese
 
     const times = candles.map((x) => x.t);
     const tfMs = TF_MS[tf] ?? 86_400_000;
+    const focus = signals
+      .filter((g) => g.tf === tf && g.status === "active")
+      .reduce<number | null>((best, g) => (best == null || g.candle_ts > best ? g.candle_ts : best), null);
     const marks: SeriesMarker<Time>[] = [];
     for (const g of signals) {
       if (g.tf !== tf) continue; // сигнал другого таймфрейма на этом графике не к месту
       const t = snapToCandle(times, g.candle_ts, tfMs);
       if (t == null) continue;
+      const fresh = g.status === "active" && g.candle_ts === focus;
       marks.push({
         time: ts(t),
         position: g.side === "buy" ? "belowBar" : "aboveBar",
         shape: g.side === "buy" ? "arrowUp" : "arrowDown",
         color: g.side === "buy" ? p.up : p.down,
-        text: g.side === "buy" ? "Вход" : "Выход",
+        size: fresh ? 2 : 1,
+        text: fresh ? (g.side === "buy" ? "Вход сейчас" : "Выход сейчас") : g.side === "buy" ? "Вход" : "Выход",
       });
     }
     for (const e of trades) {
